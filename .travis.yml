@@ -12,6 +12,4 @@ before_install:
 
 script:
   - mkdir .build
-  - cd .build
-  - docker exec -it emscripten emcmake cmake ..
-  - make
+  - cd .build && docker exec -it emscripten emcmake cmake .. && make
