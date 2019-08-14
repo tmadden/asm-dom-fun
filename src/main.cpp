@@ -13,6 +13,7 @@ render();
 asmdom::VNode* current_view = nullptr;
 
 int i = 1;
+
 std::vector<std::string> actions;
 
 bool decrease(emscripten::val)
