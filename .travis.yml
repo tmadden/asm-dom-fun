@@ -13,3 +13,12 @@ before_install:
 script:
   - docker exec -it emscripten emcmake cmake .
   - docker exec -it emscripten make
+  - mkdir html && mv index.html style.css main.js html
+
+deploy:
+  provider: pages
+  skip_cleanup: true
+  github_token: $GITHUB_TOKEN
+  on:
+    branch: master
+  local_dir: html
