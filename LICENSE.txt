@@ -1,7 +1,7 @@
 MIT License
 
-Portions of this work are copyright (c) 2019 Arthur Sonzogni as part of the
-asm-dom-cmake project. The remainder is copyright (c) 2019 Thomas Madden.
+Copyright (c) 2019 Arthur Sonzogni as a derivative of the asm-dom-cmake project.
+Additional work is copyright (c) 2019 Thomas Madden.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
