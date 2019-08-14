@@ -13,7 +13,7 @@ before_install:
 script:
   - docker exec -it emscripten emcmake cmake .
   - docker exec -it emscripten make
-  - mkdir html && mv index.html style.css main.js html
+  - mkdir html && mv index.html style.css asm-dom.js main.js html
 
 deploy:
   provider: pages
