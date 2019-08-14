@@ -11,5 +11,5 @@ before_install:
   - docker run -dit --name emscripten -v $(pwd):/src trzeci/emscripten:sdk-incoming-64bit bash
 
 script:
-  - mkdir .build
-  - cd .build && docker exec -it emscripten emcmake cmake .. && make
+  - docker exec -it emscripten emcmake cmake --build .build .
+
