@@ -3,7 +3,10 @@
 // the LICENSE file.
 
 #include "asm-dom.hpp"
+
+#include <emscripten/fetch.h>
 #include <emscripten/val.h>
+
 #include <functional>
 #include <string>
 
@@ -74,6 +77,23 @@ render()
     current_view = new_node;
 }
 
+static void
+download_succeeded(emscripten_fetch_t* fetch)
+{
+    actions.push_back("download succeeded");
+    actions.push_back(std::string(fetch->data, fetch->numBytes));
+    emscripten_fetch_close(fetch); // Free data associated with the fetch.
+    render();
+}
+
+static void
+download_failed(emscripten_fetch_t* fetch)
+{
+    actions.push_back("download failed");
+    emscripten_fetch_close(fetch); // Also free data on failure.
+    render();
+}
+
 int
 main()
 {
@@ -87,6 +107,16 @@ main()
         = document.call<emscripten::val>("getElementById", std::string("root"));
     current_view = asmdom::h(u8"div", std::string(u8"Initial view"));
     asmdom::patch(root, current_view);
+
+    // Fetch some data.
+    emscripten_fetch_attr_t attr;
+    emscripten_fetch_attr_init(&attr);
+    strcpy(attr.requestMethod, "GET");
+    attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY;
+    attr.onsuccess = download_succeeded;
+    attr.onerror = download_failed;
+    emscripten_fetch(&attr, "https://reqres.in/api/users/2");
+    actions.push_back("download started");
 
     // Update the virtual dom.
     render();

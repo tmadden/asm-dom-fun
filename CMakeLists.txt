@@ -11,6 +11,10 @@ include(cmake/release-mode.cmake)
 # Add the asm-dom library.
 include(cmake/asm-dom.cmake)
 
+# Allow the use of Emscripten's Fetch API.
+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -s FETCH=1")
+
+# Add the main target.
 add_executable(main src/main.cpp)
 set_property(TARGET main PROPERTY CXX_STANDARD 11)
 target_link_libraries(main PRIVATE asm-dom)
