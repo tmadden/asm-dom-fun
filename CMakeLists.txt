@@ -16,7 +16,7 @@ SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -s FETCH=1")
 
 # Add the main target.
 add_executable(main src/main.cpp)
-set_property(TARGET main PROPERTY CXX_STANDARD 11)
+set_property(TARGET main PROPERTY CXX_STANDARD 17)
 target_link_libraries(main PRIVATE asm-dom)
 
 # Copy the index.html file into the build directory
