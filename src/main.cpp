@@ -15,6 +15,7 @@
 #include <ctime>
 
 #define ALIA_IMPLEMENTATION
+#define ALIA_LOWERCASE_MACROS
 #include "alia.hpp"
 
 ///////
@@ -55,14 +56,12 @@ refresh();
 void
 do_text(context ctx, readable<std::string> text)
 {
-    refresh_event* e;
-    if (detect_event(ctx, &e))
-    {
+    handle_event<refresh_event>(ctx, [text](auto ctx, auto& e) {
         if (signal_is_readable(text))
         {
-            e->current_children->push_back(asmdom::h("h4", read_signal(text)));
+            e.current_children->push_back(asmdom::h("h4", read_signal(text)));
         }
-    }
+    });
 }
 
 void
@@ -70,56 +69,49 @@ do_button(context ctx, readable<std::string> text, action<> on_click)
 {
     auto id = get_widget_id(ctx);
     auto route = get_active_routing_region(ctx);
-    {
-        refresh_event* e;
-        if (detect_event(ctx, &e))
+    handle_event<refresh_event>(ctx, [=](auto ctx, auto& e) {
+        if (signal_is_readable(text))
         {
-            if (signal_is_readable(text))
-            {
-                e->current_children->push_back(asmdom::h(
-                    "button",
-                    asmdom::Data(
-                        asmdom::Attrs{{"class", "btn btn-primary mr-1"}},
-                        asmdom::Callbacks{
-                            {"onclick",
-                             [=](emscripten::val) {
-                                 auto start = std::chrono::system_clock::now();
+            e.current_children->push_back(asmdom::h(
+                "button",
+                asmdom::Data(
+                    asmdom::Attrs{{"class", "btn btn-primary mr-1"}},
+                    asmdom::Callbacks{
+                        {"onclick",
+                         [=](emscripten::val) {
+                             auto start = std::chrono::system_clock::now();
 
-                                 click_event click;
-                                 click.id = id;
-                                 dispatch_targeted_event(
-                                     the_system, click, route);
-                                 refresh();
+                             click_event click;
+                             click.id = id;
+                             dispatch_targeted_event(the_system, click, route);
+                             refresh();
 
-                                 auto end = std::chrono::system_clock::now();
+                             auto end = std::chrono::system_clock::now();
 
-                                 std::chrono::duration<double> elapsed_seconds
-                                     = end - start;
-                                 std::time_t end_time
-                                     = std::chrono::system_clock::to_time_t(
-                                         end);
+                             std::chrono::duration<double> elapsed_seconds
+                                 = end - start;
+                             std::time_t end_time
+                                 = std::chrono::system_clock::to_time_t(end);
 
-                                 std::cout << "finished computation at "
-                                           << std::ctime(&end_time)
-                                           << "elapsed time: "
-                                           << elapsed_seconds.count() << "s\n";
+                             std::cout
+                                 << "finished computation at "
+                                 << std::ctime(&end_time)
+                                 << "elapsed time: " << elapsed_seconds.count()
+                                 << "s\n";
 
-                                 return true;
-                             }}}),
-                    read_signal(text)));
-            }
+                             return true;
+                         }}}),
+                read_signal(text)));
         }
-    }
-    {
-        click_event* e;
-        if (detect_event(ctx, &e))
+    });
+    handle_event<click_event>(ctx, [=](auto ctx, auto& e) {
         {
-            if (e->id == id && action_is_ready(on_click))
+            if (e.id == id && action_is_ready(on_click))
             {
                 perform_action(on_click);
             }
         }
-    }
+    });
 }
 
 void
@@ -170,8 +162,8 @@ do_ui(context ctx)
     std::cout << "do_ui" << std::endl;
     static int n = 1;
     do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), direct(n)));
-    do_button(ctx, value("increase"), direct(n) <<= direct(n) + 1_a);
-    do_button(ctx, value("decrease"), direct(n) <<= direct(n) - 1_a);
+    do_button(ctx, "increase"_a, direct(n) <<= direct(n) + 1_a);
+    do_button(ctx, "decrease"_a, direct(n) <<= direct(n) - 1_a);
 }
 
 // void

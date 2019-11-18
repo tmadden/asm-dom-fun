@@ -626,6 +626,19 @@ remove_component(
 #endif
 }
 
+// Determine if a component is in a collection.
+// :Tag identifies the component.
+template<class Tag, class Collection>
+bool
+has_component(Collection collection)
+{
+#ifdef ALIA_STATIC_COMPONENT_CHECKING
+    return detail::component_collection_contains_tag<Collection, Tag>::value;
+#else
+    return has_component<Tag>(*collection.storage);
+#endif
+}
+
 // Get a reference to the data associated with a component in a collection.
 // :Tag identifies the component.
 // If static checking is enabled, this generates a compile-time error if :Tag
@@ -691,6 +704,226 @@ get_component(generic_component_storage<Data>& storage)
 } // namespace alia
 
 
+
+namespace alia {
+
+struct data_traversal_tag
+{
+};
+struct data_traversal;
+
+struct event_traversal_tag
+{
+};
+struct event_traversal;
+
+struct any_pointer
+{
+    any_pointer()
+    {
+    }
+
+    template<class T>
+    any_pointer(T* ptr) : ptr(ptr)
+    {
+    }
+
+    template<class T>
+    operator T*()
+    {
+        return reinterpret_cast<T*>(ptr);
+    }
+
+    void* ptr;
+};
+
+template<class T>
+bool
+operator==(any_pointer p, T* other)
+{
+    return reinterpret_cast<T*>(p.ptr) == other;
+}
+template<class T>
+bool
+operator==(T* other, any_pointer p)
+{
+    return other == reinterpret_cast<T*>(p.ptr);
+}
+template<class T>
+bool
+operator!=(any_pointer p, T* other)
+{
+    return reinterpret_cast<T*>(p.ptr) != other;
+}
+template<class T>
+bool
+operator!=(T* other, any_pointer p)
+{
+    return other != reinterpret_cast<T*>(p.ptr);
+}
+
+// The structure we use to store components. It provides direct storage of the
+// commonly-used components in the core of alia.
+struct component_storage
+{
+    data_traversal* data = 0;
+    event_traversal* event = 0;
+    // generic storage for other components
+    generic_component_storage<any_pointer> other;
+};
+
+// All component access is done through the following 'manipulator' structure.
+// Specializations can be defined for tags that have direct storage.
+
+template<class Tag>
+struct component_manipulator
+{
+    static bool
+    has(component_storage& storage)
+    {
+        return has_component<Tag>(storage.other);
+    }
+    static void
+    add(component_storage& storage, any_pointer data)
+    {
+        add_component<Tag>(storage.other, data);
+    }
+    static void
+    remove(component_storage& storage)
+    {
+        remove_component<Tag>(storage.other);
+    }
+    static any_pointer
+    get(component_storage& storage)
+    {
+        return get_component<Tag>(storage.other);
+    }
+};
+
+template<>
+struct component_manipulator<data_traversal_tag>
+{
+    static bool
+    has(component_storage& storage)
+    {
+        return storage.data != 0;
+    }
+    static void
+    add(component_storage& storage, data_traversal* data)
+    {
+        storage.data = data;
+    }
+    static void
+    remove(component_storage& storage)
+    {
+        storage.data = 0;
+    }
+    static data_traversal*
+    get(component_storage& storage)
+    {
+#ifdef ALIA_DYNAMIC_COMPONENT_CHECKING
+        if (!storage.data)
+            throw "missing data traversal component";
+#endif
+        return storage.data;
+    }
+};
+
+template<>
+struct component_manipulator<event_traversal_tag>
+{
+    static bool
+    has(component_storage& storage)
+    {
+        return storage.event != 0;
+    }
+    static void
+    add(component_storage& storage, event_traversal* event)
+    {
+        storage.event = event;
+    }
+    static void
+    remove(component_storage& storage)
+    {
+        storage.event = 0;
+    }
+    static event_traversal*
+    get(component_storage& storage)
+    {
+#ifdef ALIA_DYNAMIC_COMPONENT_CHECKING
+        if (!storage.event)
+            throw "missing event traversal component";
+#endif
+        return storage.event;
+    }
+};
+
+// The following is the implementation of the interface expected of component
+// storage objects. It simply forwards the requests along to the appropriate
+// manipulator.
+
+template<class Tag>
+bool
+has_component(component_storage& storage)
+{
+    return component_manipulator<Tag>::has(storage);
+}
+
+template<class Tag, class Data>
+void
+add_component(component_storage& storage, Data&& data)
+{
+    component_manipulator<Tag>::add(storage, std::forward<Data&&>(data));
+}
+
+template<class Tag>
+void
+remove_component(component_storage& storage)
+{
+    component_manipulator<Tag>::remove(storage);
+}
+
+template<class Tag>
+auto
+get_component(component_storage& storage)
+{
+    return component_manipulator<Tag>::get(storage);
+}
+
+// Finally, the typedef for the context...
+
+typedef add_component_type_t<
+    empty_component_collection<component_storage>,
+    event_traversal_tag,
+    event_traversal*>
+    dataless_context;
+
+typedef add_component_type_t<
+    dataless_context,
+    data_traversal_tag,
+    data_traversal*>
+    context;
+
+// And some convenience functions...
+
+template<class Context>
+data_traversal&
+get_data_traversal(Context ctx)
+{
+    return *get_component<data_traversal_tag>(ctx);
+}
+
+bool
+is_refresh_pass(context ctx);
+
+template<class Context>
+event_traversal&
+get_event_traversal(Context ctx)
+{
+    return *get_component<event_traversal_tag>(ctx);
+}
+
+} // namespace alia
 
 
 #include <functional>
@@ -1121,6 +1354,10 @@ static simple_id<unit_id_type*> const unit_id(nullptr);
 } // namespace alia
 
 
+#include <functional>
+
+
+
 
 // This file defines the core types and functions of the signals module.
 
@@ -1478,6 +1715,27 @@ write_signal(Signal const& signal, Value const& value)
     assert(signal.is_writable());
     signal.write(value);
 }
+
+// signal_is_bidirectional<Signal>::value yields a compile-time boolean
+// indicating whether or not the given signal type supports both reading and
+// writing.
+template<class Signal>
+struct signal_is_bidirectional : signal_direction_is_compatible<
+                                     bidirectional_signal,
+                                     typename Signal::direction_tag>
+{
+};
+
+// is_bidirectional_signal_type<T>::value yields a compile-time boolean
+// indicating whether or not T is an alia signal that supports both reading and
+// writing.
+template<class T>
+struct is_bidirectional_signal_type : std::conditional_t<
+                                          is_signal_type<T>::value,
+                                          signal_is_bidirectional<T>,
+                                          std::false_type>
+{
+};
 
 } // namespace alia
 
@@ -2183,527 +2441,7 @@ struct scoped_data_traversal
     naming_context root_map_;
 };
 
-// The following are utilities that are used to implement the control flow
-// macros. They shouldn't be used directly by applications.
-
-struct if_block : noncopyable
-{
-    if_block(data_traversal& traversal, bool condition);
-
- private:
-    scoped_data_block scoped_data_block_;
-};
-
-struct pass_dependent_if_block : noncopyable
-{
-    pass_dependent_if_block(data_traversal& traversal, bool condition);
-
- private:
-    scoped_data_block scoped_data_block_;
-};
-
-struct switch_block : noncopyable
-{
-    template<class Context>
-    switch_block(Context& ctx)
-    {
-        nc_.begin(ctx);
-    }
-    template<class Id>
-    void
-    activate_case(Id id)
-    {
-        active_case_.end();
-        active_case_.begin(nc_, make_id(id), manual_delete(true));
-    }
-
- private:
-    naming_context nc_;
-    named_block active_case_;
-};
-
-struct loop_block : noncopyable
-{
-    loop_block(data_traversal& traversal);
-    ~loop_block();
-    data_block&
-    block() const
-    {
-        return *block_;
-    }
-    data_traversal&
-    traversal() const
-    {
-        return *traversal_;
-    }
-    void
-    next();
-
- private:
-    data_traversal* traversal_;
-    data_block* block_;
-};
-
-// The following are macros used to annotate control flow.
-// They are used exactly like their C equivalents, but all require an alia_end
-// after the end of their scope.
-// Also note that all come in two forms. One form ends in an underscore and
-// takes the context as its first argument. The other form has no trailing
-// underscore and assumes that the context is a variable named 'ctx'.
-
-// condition_is_true(x), where x is a signal whose value is testable in a
-// boolean context, returns true iff x is readable and its value is true.
-template<class Signal>
-std::enable_if_t<is_readable_signal_type<Signal>::value, bool>
-condition_is_true(Signal const& x)
-{
-    return signal_is_readable(x) && (read_signal(x) ? true : false);
-}
-
-// condition_is_false(x), where x is a signal whose value is testable in a
-// boolean context, returns true iff x is readable and its value is false.
-template<class Signal>
-std::enable_if_t<is_readable_signal_type<Signal>::value, bool>
-condition_is_false(Signal const& x)
-{
-    return signal_is_readable(x) && (read_signal(x) ? false : true);
-}
-
-// condition_is_readable(x), where x is a readable signal type, calls
-// signal_is_readable.
-template<class Signal>
-std::enable_if_t<is_readable_signal_type<Signal>::value, bool>
-condition_is_readable(Signal const& x)
-{
-    return signal_is_readable(x);
-}
-
-// read_condition(x), where x is a readable signal type, calls read_signal.
-template<class Signal>
-std::enable_if_t<
-    is_readable_signal_type<Signal>::value,
-    typename Signal::value_type>
-read_condition(Signal const& x)
-{
-    return read_signal(x);
-}
-
-// ALIA_STRICT_CONDITIONALS disables the definitions that allow non-signals to
-// be used in if/else/switch macros.
-#ifndef ALIA_STRICT_CONDITIONALS
-
-// condition_is_true(x) evaluates x in a boolean context.
-template<class T>
-std::enable_if_t<!is_signal_type<T>::value, bool>
-condition_is_true(T x)
-{
-    return x ? true : false;
-}
-
-// condition_is_false(x) evaluates x in a boolean context and inverts it.
-template<class T>
-std::enable_if_t<!is_signal_type<T>::value, bool>
-condition_is_false(T x)
-{
-    return x ? false : true;
-}
-
-// condition_is_readable(x), where x is NOT a signal type, always returns true.
-template<class T>
-std::enable_if_t<!is_signal_type<T>::value, bool>
-condition_is_readable(T const& x)
-{
-    return true;
-}
-
-// read_condition(x), where x is NOT a signal type, simply returns x.
-template<class T>
-std::enable_if_t<!is_signal_type<T>::value, T const&>
-read_condition(T const& x)
-{
-    return x;
-}
-
-#endif
-
-// if, else_if, else
-
-#define ALIA_IF_(ctx, condition)                                               \
-    {                                                                          \
-        bool _alia_else_condition ALIA_UNUSED;                                 \
-        {                                                                      \
-            auto const& _alia_condition_value = (condition);                   \
-            bool _alia_if_condition                                            \
-                = ::alia::condition_is_true(_alia_condition_value);            \
-            _alia_else_condition                                               \
-                = ::alia::condition_is_false(_alia_condition_value);           \
-            ::alia::if_block _alia_if_block(                                   \
-                get_data_traversal(ctx), _alia_if_condition);                  \
-            if (_alia_if_condition)                                            \
-            {
-
-#define ALIA_IF(condition) ALIA_IF_(ctx, condition)
-
-#define ALIA_ELSE_IF_(ctx, condition)                                          \
-    }                                                                          \
-    }                                                                          \
-    {                                                                          \
-        auto const& _alia_condition_value = (condition);                       \
-        bool _alia_else_if_condition                                           \
-            = _alia_else_condition                                             \
-              && ::alia::condition_is_true(_alia_condition_value);             \
-        _alia_else_condition                                                   \
-            = _alia_else_condition                                             \
-              && ::alia::condition_is_false(_alia_condition_value);            \
-        ::alia::if_block _alia_if_block(                                       \
-            get_data_traversal(ctx), _alia_else_if_condition);                 \
-        if (_alia_else_if_condition)                                           \
-        {
-
-#define ALIA_ELSE_IF(condition) ALIA_ELSE_IF_(ctx, condition)
-
-#define ALIA_ELSE_(ctx)                                                        \
-    }                                                                          \
-    }                                                                          \
-    {                                                                          \
-        ::alia::if_block _alia_if_block(                                       \
-            get_data_traversal(ctx), _alia_else_condition);                    \
-        if (_alia_else_condition)                                              \
-        {
-
-#define ALIA_ELSE ALIA_ELSE_(ctx)
-
-#ifdef ALIA_LOWERCASE_MACROS
-#define alia_if_(ctx, condition) ALIA_IF_(ctx, condition)
-#define alia_if(condition) ALIA_IF(condition)
-#define alia_else_if_(ctx, condition) ALIA_ELSE_IF_(ctx, condition)
-#define alia_else_if(condition) ALIA_ELSE_IF(condition)
-#define alia_else_(ctx) ALIA_ELSE(ctx)
-#define alia_else ALIA_ELSE
-#endif
-
-// pass_dependent_if - This is used for tests that involve conditions that
-// change from one pass to another. It does not clear out cached data within
-// the block if it's skipped.
-
-#define ALIA_PASS_DEPENDENT_IF_(ctx, condition)                                \
-    {                                                                          \
-        {                                                                      \
-            bool _alia_condition = ::alia::condition_is_true(condition);       \
-            ::alia::pass_dependent_if_block _alia_if_block(                    \
-                get_data_traversal(ctx), _alia_condition);                     \
-            if (_alia_condition)                                               \
-            {
-
-#define ALIA_PASS_DEPENDENT_IF(condition)                                      \
-    ALIA_PASS_DEPENDENT_IF_(ctx, condition)
-
-#ifdef ALIA_LOWERCASE_MACROS
-#define alia_pass_dependent_if_(ctx, condition)                                \
-    ALIA_PASS_DEPENDENT_IF_(ctx, condition)
-#define alia_pass_dependent_if(condition) ALIA_PASS_DEPENDENT_IF(condition)
-#endif
-
-// switch
-
-#define ALIA_SWITCH_(ctx, x)                                                   \
-    {                                                                          \
-        ::alia::switch_block _alia_switch_block(ctx);                          \
-        if (::alia::condition_is_readable(x))                                  \
-        {                                                                      \
-            switch (::alia::read_condition(x))                                 \
-            {
-
-#define ALIA_SWITCH(x) ALIA_SWITCH_(ctx, x)
-
-#define ALIA_CONCATENATE_HELPER(a, b) a##b
-#define ALIA_CONCATENATE(a, b) ALIA_CONCATENATE_HELPER(a, b)
-
-#define ALIA_CASE(c)                                                           \
-    case c:                                                                    \
-        _alia_switch_block.activate_case(c);                                   \
-        goto ALIA_CONCATENATE(_alia_dummy_label_, __LINE__);                   \
-        ALIA_CONCATENATE(_alia_dummy_label_, __LINE__)
-
-#define ALIA_DEFAULT                                                           \
-    default:                                                                   \
-        _alia_switch_block.activate_case("_alia_default_case");                \
-        goto ALIA_CONCATENATE(_alia_dummy_label_, __LINE__);                   \
-        ALIA_CONCATENATE(_alia_dummy_label_, __LINE__)
-
-#ifdef ALIA_LOWERCASE_MACROS
-#define alia_switch_(ctx, x) ALIA_SWITCH_(ctx, x)
-#define alia_switch(x) ALIA_SWITCH(x)
-#define alia_case(c) ALIA_CASE(c)
-#define alia_default ALIA_DEFAULT
-#endif
-
-// for
-
-#define ALIA_FOR_(ctx, x)                                                      \
-    {                                                                          \
-        {                                                                      \
-            ::alia::loop_block _alia_looper(get_data_traversal(ctx));          \
-            for (x)                                                            \
-            {                                                                  \
-                ::alia::scoped_data_block _alia_scope;                         \
-                _alia_scope.begin(                                             \
-                    _alia_looper.traversal(), _alia_looper.block());           \
-                _alia_looper.next();
-
-#define ALIA_FOR(x) ALIA_FOR_(ctx, x)
-
-#ifdef ALIA_LOWERCASE_MACROS
-#define alia_for_(ctx, x) ALIA_FOR_(ctx, x)
-#define alia_for(x) ALIA_FOR(x)
-#endif
-
-// while
-
-#define ALIA_WHILE_(ctx, x)                                                    \
-    {                                                                          \
-        {                                                                      \
-            ::alia::loop_block _alia_looper(get_data_traversal(ctx));          \
-            while (x)                                                          \
-            {                                                                  \
-                ::alia::scoped_data_block _alia_scope;                         \
-                _alia_scope.begin(                                             \
-                    _alia_looper.traversal(), _alia_looper.block());           \
-                _alia_looper.next();
-
-#define ALIA_WHILE(x) ALIA_WHILE_(ctx, x)
-
-#ifdef ALIA_LOWERCASE_MACROS
-#define alia_while_(ctx, x) ALIA_WHILE_(ctx, x)
-#define alia_while(x) ALIA_WHILE(x)
-#endif
-
-// end
-
-#define ALIA_END                                                               \
-    }                                                                          \
-    }                                                                          \
-    }
-
-#ifdef ALIA_LOWERCASE_MACROS
-#define alia_end ALIA_END
-#endif
-
 } // namespace alia
-
-
-namespace alia {
-
-struct data_traversal_tag
-{
-};
-struct data_traversal;
-
-struct event_traversal_tag
-{
-};
-struct event_traversal;
-
-struct any_pointer
-{
-    any_pointer()
-    {
-    }
-
-    template<class T>
-    any_pointer(T* ptr) : ptr(ptr)
-    {
-    }
-
-    template<class T>
-    operator T*()
-    {
-        return reinterpret_cast<T*>(ptr);
-    }
-
-    void* ptr;
-};
-
-template<class T>
-bool
-operator==(any_pointer p, T* other)
-{
-    return reinterpret_cast<T*>(p.ptr) == other;
-}
-template<class T>
-bool
-operator==(T* other, any_pointer p)
-{
-    return other == reinterpret_cast<T*>(p.ptr);
-}
-template<class T>
-bool
-operator!=(any_pointer p, T* other)
-{
-    return reinterpret_cast<T*>(p.ptr) != other;
-}
-template<class T>
-bool
-operator!=(T* other, any_pointer p)
-{
-    return other != reinterpret_cast<T*>(p.ptr);
-}
-
-// The structure we use to store components. It provides direct storage of the
-// commonly-used components in the core of alia.
-struct component_storage
-{
-    data_traversal* data = 0;
-    event_traversal* event = 0;
-    // generic storage for other components
-    generic_component_storage<any_pointer> other;
-};
-
-// All component access is done through the following 'manipulator' structure.
-// Specializations can be defined for tags that have direct storage.
-
-template<class Tag>
-struct component_manipulator
-{
-    static bool
-    has(component_storage& storage)
-    {
-        return has_component<Tag>(storage.other);
-    }
-    static void
-    add(component_storage& storage, any_pointer data)
-    {
-        add_component<Tag>(storage.other, data);
-    }
-    static void
-    remove(component_storage& storage)
-    {
-        remove_component<Tag>(storage.other);
-    }
-    static any_pointer
-    get(component_storage& storage)
-    {
-        return get_component<Tag>(storage.other);
-    }
-};
-
-template<>
-struct component_manipulator<data_traversal_tag>
-{
-    static bool
-    has(component_storage& storage)
-    {
-        return storage.data != 0;
-    }
-    static void
-    add(component_storage& storage, data_traversal* data)
-    {
-        storage.data = data;
-    }
-    static void
-    remove(component_storage& storage)
-    {
-        storage.data = 0;
-    }
-    static data_traversal*
-    get(component_storage& storage)
-    {
-        return storage.data;
-    }
-};
-
-template<>
-struct component_manipulator<event_traversal_tag>
-{
-    static bool
-    has(component_storage& storage)
-    {
-        return storage.event != 0;
-    }
-    static void
-    add(component_storage& storage, event_traversal* event)
-    {
-        storage.event = event;
-    }
-    static void
-    remove(component_storage& storage)
-    {
-        storage.event = 0;
-    }
-    static event_traversal*
-    get(component_storage& storage)
-    {
-        return storage.event;
-    }
-};
-
-// The following is the implementation of the interface expected of component
-// storage objects. It simply forwards the requests along to the appropriate
-// manipulator.
-
-template<class Tag>
-bool
-has_component(component_storage& storage)
-{
-    return component_manipulator<Tag>::has(storage);
-}
-
-template<class Tag, class Data>
-void
-add_component(component_storage& storage, Data&& data)
-{
-    component_manipulator<Tag>::add(storage, std::forward<Data&&>(data));
-}
-
-template<class Tag>
-void
-remove_component(component_storage& storage)
-{
-    component_manipulator<Tag>::remove(storage);
-}
-
-template<class Tag>
-auto
-get_component(component_storage& storage)
-{
-    return component_manipulator<Tag>::get(storage);
-}
-
-// Finally, the typedef for the context...
-
-typedef add_component_type_t<
-    add_component_type_t<
-        empty_component_collection<component_storage>,
-        event_traversal_tag,
-        event_traversal*>,
-    data_traversal_tag,
-    data_traversal*>
-    context;
-
-// And some convenience functions...
-
-inline data_traversal&
-get_data_traversal(context& ctx)
-{
-    return *get_component<data_traversal_tag>(ctx);
-}
-
-inline bool
-is_refresh_pass(context& ctx)
-{
-    return get_data_traversal(ctx).gc_enabled;
-}
-
-inline event_traversal&
-get_event_traversal(context& ctx)
-{
-    return *get_component<event_traversal_tag>(ctx);
-}
-
-} // namespace alia
-
-
-#include <functional>
 
 
 namespace alia {
@@ -2715,26 +2453,6 @@ struct system
 };
 
 } // namespace alia
-
-
-
-namespace alia {
-
-// make_returnable_ref(ctx, x) stores a copy of x within the data graph of ctx
-// and returns a reference to that copy. (It will move instead of copying when
-// possible.)
-template<class T>
-T*
-make_returnable_ref(context ctx, T x)
-{
-    T* storage;
-    get_cached_data(ctx, &storage);
-    *storage = std::move(x);
-    return *storage;
-}
-
-} // namespace alia
-
 
 
 
@@ -2792,6 +2510,216 @@ struct lazy_reader
 };
 
 } // namespace alia
+
+
+// This file defines various utilities for constructing basic signals.
+
+namespace alia {
+
+// empty<Value>() gives a signal that never has a value.
+template<class Value>
+struct empty_signal : signal<empty_signal<Value>, Value, bidirectional_signal>
+{
+    empty_signal()
+    {
+    }
+    id_interface const&
+    value_id() const
+    {
+        return no_id;
+    }
+    bool
+    is_readable() const
+    {
+        return false;
+    }
+    // Since this is never readable, read() should never be called.
+    // LCOV_EXCL_START
+    Value const&
+    read() const
+    {
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wnull-dereference"
+#endif
+        return *(Value const*) nullptr;
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+    }
+    // LCOV_EXCL_STOP
+    bool
+    is_writable() const
+    {
+        return false;
+    }
+    // Since this is never writable, write() should never be called.
+    // LCOV_EXCL_START
+    void
+    write(Value const& value) const
+    {
+    }
+    // LCOV_EXCL_STOP
+};
+template<class Value>
+empty_signal<Value>
+empty()
+{
+    return empty_signal<Value>();
+}
+
+// value(v) creates a read-only signal that carries the value v.
+template<class Value>
+struct value_signal
+    : regular_signal<value_signal<Value>, Value, read_only_signal>
+{
+    explicit value_signal(Value const& v) : v_(v)
+    {
+    }
+    bool
+    is_readable() const
+    {
+        return true;
+    }
+    Value const&
+    read() const
+    {
+        return v_;
+    }
+
+ private:
+    Value v_;
+};
+template<class Value>
+value_signal<Value>
+value(Value const& v)
+{
+    return value_signal<Value>(v);
+}
+
+// This is a special overload of value() for C-style string literals.
+struct string_literal_signal
+    : signal<string_literal_signal, std::string, read_only_signal>
+{
+    string_literal_signal(char const* x) : text_(x)
+    {
+    }
+    id_interface const&
+    value_id() const
+    {
+        return unit_id;
+    }
+    bool
+    is_readable() const
+    {
+        return true;
+    }
+    std::string const&
+    read() const
+    {
+        return lazy_reader_.read([&] { return std::string(text_); });
+    }
+
+ private:
+    char const* text_;
+    lazy_reader<std::string> lazy_reader_;
+};
+inline string_literal_signal
+value(char const* text)
+{
+    return string_literal_signal(text);
+}
+
+// literal operators
+namespace literals {
+inline value_signal<unsigned long long int>
+operator"" _a(unsigned long long int n)
+{
+    return value(n);
+}
+inline value_signal<long double> operator"" _a(long double n)
+{
+    return value(n);
+}
+inline string_literal_signal operator"" _a(char const* s, size_t n)
+{
+    return string_literal_signal(s);
+}
+} // namespace literals
+
+// direct(x), where x is a non-const reference, creates a bidirectional signal
+// that directly exposes the value of x.
+template<class Value>
+struct direct_signal
+    : regular_signal<direct_signal<Value>, Value, bidirectional_signal>
+{
+    explicit direct_signal(Value* v) : v_(v)
+    {
+    }
+    bool
+    is_readable() const
+    {
+        return true;
+    }
+    Value const&
+    read() const
+    {
+        return *v_;
+    }
+    bool
+    is_writable() const
+    {
+        return true;
+    }
+    void
+    write(Value const& value) const
+    {
+        *v_ = value;
+    }
+
+ private:
+    Value* v_;
+};
+template<class Value>
+direct_signal<Value>
+direct(Value& x)
+{
+    return direct_signal<Value>(&x);
+}
+
+// direct(x), where x is a const reference, creates a read-only signal that
+// directly exposes the value of x.
+template<class Value>
+struct direct_const_signal
+    : regular_signal<direct_const_signal<Value>, Value, read_only_signal>
+{
+    explicit direct_const_signal(Value const* v) : v_(v)
+    {
+    }
+    bool
+    is_readable() const
+    {
+        return true;
+    }
+    Value const&
+    read() const
+    {
+        return *v_;
+    }
+
+ private:
+    Value const* v_;
+};
+template<class Value>
+direct_const_signal<Value>
+direct(Value const& x)
+{
+    return direct_const_signal<Value>(&x);
+}
+
+} // namespace alia
+
+
 
 
 namespace alia {
@@ -3755,6 +3683,56 @@ operator<<=(Sink const& sink, Source const& source)
     return copy_action<Sink, Source>(sink, source);
 }
 
+// For most compound assignment operators (e.g., +=), a += b, where :a and :b
+// are signals, creates an action that sets :a equal to :a + :b.
+
+#define ALIA_DEFINE_COMPOUND_ASSIGNMENT_OPERATOR(assignment_form, normal_form) \
+    template<                                                                  \
+        class A,                                                               \
+        class B,                                                               \
+        std::enable_if_t<                                                      \
+            is_bidirectional_signal_type<A>::value                             \
+                && is_readable_signal_type<B>::value,                          \
+            int> = 0>                                                          \
+    auto operator assignment_form(A const& a, B const& b)                      \
+    {                                                                          \
+        return a <<= (a normal_form b);                                        \
+    }
+
+ALIA_DEFINE_COMPOUND_ASSIGNMENT_OPERATOR(+=, +)
+ALIA_DEFINE_COMPOUND_ASSIGNMENT_OPERATOR(-=, -)
+ALIA_DEFINE_COMPOUND_ASSIGNMENT_OPERATOR(*=, *)
+ALIA_DEFINE_COMPOUND_ASSIGNMENT_OPERATOR(/=, /)
+ALIA_DEFINE_COMPOUND_ASSIGNMENT_OPERATOR(^=, ^)
+ALIA_DEFINE_COMPOUND_ASSIGNMENT_OPERATOR(%=, %)
+ALIA_DEFINE_COMPOUND_ASSIGNMENT_OPERATOR(&=, &)
+ALIA_DEFINE_COMPOUND_ASSIGNMENT_OPERATOR(|=, |)
+
+#undef ALIA_DEFINE_COMPOUND_ASSIGNMENT_OPERATOR
+
+// The increment and decrement operators work similarly.
+
+#define ALIA_DEFINE_BY_ONE_OPERATOR(assignment_form, normal_form)              \
+    template<                                                                  \
+        class A,                                                               \
+        std::enable_if_t<is_bidirectional_signal_type<A>::value, int> = 0>     \
+    auto operator assignment_form(A const& a)                                  \
+    {                                                                          \
+        return a <<= (a normal_form value(typename A::value_type(1)));         \
+    }                                                                          \
+    template<                                                                  \
+        class A,                                                               \
+        std::enable_if_t<is_bidirectional_signal_type<A>::value, int> = 0>     \
+    auto operator assignment_form(A const& a, int)                             \
+    {                                                                          \
+        return a <<= (a normal_form value(typename A::value_type(1)));         \
+    }
+
+ALIA_DEFINE_BY_ONE_OPERATOR(++, +)
+ALIA_DEFINE_BY_ONE_OPERATOR(--, -)
+
+#undef ALIA_DEFINE_BY_ONE_OPERATOR
+
 // make_toggle_action(flag), where :flag is a signal to a boolean, creates an
 // action that will toggle the value of :flag between true and false.
 //
@@ -3884,6 +3862,369 @@ always_ready()
 
 
 
+
+namespace alia {
+
+// The following are utilities that are used to implement the control flow
+// macros. They shouldn't be used directly by applications.
+
+struct if_block : noncopyable
+{
+    if_block(data_traversal& traversal, bool condition);
+
+ private:
+    scoped_data_block scoped_data_block_;
+};
+
+struct switch_block : noncopyable
+{
+    template<class Context>
+    switch_block(Context& ctx)
+    {
+        nc_.begin(ctx);
+    }
+    template<class Id>
+    void
+    activate_case(Id id)
+    {
+        active_case_.end();
+        active_case_.begin(nc_, make_id(id), manual_delete(true));
+    }
+
+ private:
+    naming_context nc_;
+    named_block active_case_;
+};
+
+struct loop_block : noncopyable
+{
+    loop_block(data_traversal& traversal);
+    ~loop_block();
+    data_block&
+    block() const
+    {
+        return *block_;
+    }
+    data_traversal&
+    traversal() const
+    {
+        return *traversal_;
+    }
+    void
+    next();
+
+ private:
+    data_traversal* traversal_;
+    data_block* block_;
+};
+
+// The following are macros used to annotate control flow.
+// They are used exactly like their C equivalents, but all require an alia_end
+// after the end of their scope.
+// Also note that all come in two forms. One form ends in an underscore and
+// takes the context as its first argument. The other form has no trailing
+// underscore and assumes that the context is a variable named 'ctx'.
+
+// condition_is_true(x), where x is a signal whose value is testable in a
+// boolean context, returns true iff x is readable and its value is true.
+template<class Signal>
+std::enable_if_t<is_readable_signal_type<Signal>::value, bool>
+condition_is_true(Signal const& x)
+{
+    return signal_is_readable(x) && (read_signal(x) ? true : false);
+}
+
+// condition_is_false(x), where x is a signal whose value is testable in a
+// boolean context, returns true iff x is readable and its value is false.
+template<class Signal>
+std::enable_if_t<is_readable_signal_type<Signal>::value, bool>
+condition_is_false(Signal const& x)
+{
+    return signal_is_readable(x) && (read_signal(x) ? false : true);
+}
+
+// condition_is_readable(x), where x is a readable signal type, calls
+// signal_is_readable.
+template<class Signal>
+std::enable_if_t<is_readable_signal_type<Signal>::value, bool>
+condition_is_readable(Signal const& x)
+{
+    return signal_is_readable(x);
+}
+
+// read_condition(x), where x is a readable signal type, calls read_signal.
+template<class Signal>
+std::enable_if_t<
+    is_readable_signal_type<Signal>::value,
+    typename Signal::value_type>
+read_condition(Signal const& x)
+{
+    return read_signal(x);
+}
+
+// ALIA_STRICT_CONDITIONALS disables the definitions that allow non-signals to
+// be used in if/else/switch macros.
+#ifndef ALIA_STRICT_CONDITIONALS
+
+// condition_is_true(x) evaluates x in a boolean context.
+template<class T>
+std::enable_if_t<!is_signal_type<T>::value, bool>
+condition_is_true(T x)
+{
+    return x ? true : false;
+}
+
+// condition_is_false(x) evaluates x in a boolean context and inverts it.
+template<class T>
+std::enable_if_t<!is_signal_type<T>::value, bool>
+condition_is_false(T x)
+{
+    return x ? false : true;
+}
+
+// condition_is_readable(x), where x is NOT a signal type, always returns true.
+template<class T>
+std::enable_if_t<!is_signal_type<T>::value, bool>
+condition_is_readable(T const& x)
+{
+    return true;
+}
+
+// read_condition(x), where x is NOT a signal type, simply returns x.
+template<class T>
+std::enable_if_t<!is_signal_type<T>::value, T const&>
+read_condition(T const& x)
+{
+    return x;
+}
+
+#endif
+
+// if, else_if, else
+
+#define ALIA_IF_(ctx, condition)                                               \
+    {                                                                          \
+        bool _alia_else_condition ALIA_UNUSED;                                 \
+        {                                                                      \
+            auto const& _alia_condition = (condition);                         \
+            bool _alia_if_condition                                            \
+                = ::alia::condition_is_true(_alia_condition);                  \
+            _alia_else_condition                                               \
+                = ::alia::condition_is_false(_alia_condition);                 \
+            ::alia::if_block _alia_if_block(                                   \
+                get_data_traversal(ctx), _alia_if_condition);                  \
+            if (_alia_if_condition)                                            \
+            {
+
+#define ALIA_IF(condition) ALIA_IF_(ctx, condition)
+
+#define ALIA_ELSE_IF_(ctx, condition)                                          \
+    }                                                                          \
+    }                                                                          \
+    {                                                                          \
+        auto const& _alia_condition = (condition);                             \
+        bool _alia_else_if_condition                                           \
+            = _alia_else_condition                                             \
+              && ::alia::condition_is_true(_alia_condition);                   \
+        _alia_else_condition = _alia_else_condition                            \
+                               && ::alia::condition_is_false(_alia_condition); \
+        ::alia::if_block _alia_if_block(                                       \
+            get_data_traversal(ctx), _alia_else_if_condition);                 \
+        if (_alia_else_if_condition)                                           \
+        {
+
+#define ALIA_ELSE_IF(condition) ALIA_ELSE_IF_(ctx, condition)
+
+#define ALIA_ELSE_(ctx)                                                        \
+    }                                                                          \
+    }                                                                          \
+    {                                                                          \
+        ::alia::if_block _alia_if_block(                                       \
+            get_data_traversal(ctx), _alia_else_condition);                    \
+        if (_alia_else_condition)                                              \
+        {
+
+#define ALIA_ELSE ALIA_ELSE_(ctx)
+
+#ifdef ALIA_LOWERCASE_MACROS
+#define alia_if_(ctx, condition) ALIA_IF_(ctx, condition)
+#define alia_if(condition) ALIA_IF(condition)
+#define alia_else_if_(ctx, condition) ALIA_ELSE_IF_(ctx, condition)
+#define alia_else_if(condition) ALIA_ELSE_IF(condition)
+#define alia_else_(ctx) ALIA_ELSE(ctx)
+#define alia_else ALIA_ELSE
+#endif
+
+// switch
+
+#define ALIA_SWITCH_(ctx, x)                                                   \
+    {                                                                          \
+        ::alia::switch_block _alia_switch_block(ctx);                          \
+        if (::alia::condition_is_readable(x))                                  \
+        {                                                                      \
+            switch (::alia::read_condition(x))                                 \
+            {
+
+#define ALIA_SWITCH(x) ALIA_SWITCH_(ctx, x)
+
+#define ALIA_CONCATENATE_HELPER(a, b) a##b
+#define ALIA_CONCATENATE(a, b) ALIA_CONCATENATE_HELPER(a, b)
+
+#define ALIA_CASE_(ctx, c)                                                     \
+    case c:                                                                    \
+        _alia_switch_block.activate_case(c);                                   \
+        goto ALIA_CONCATENATE(_alia_dummy_label_, __LINE__);                   \
+        ALIA_CONCATENATE(_alia_dummy_label_, __LINE__)
+
+#define ALIA_CASE(c) ALIA_CASE_(ctx, c)
+
+#define ALIA_DEFAULT_(ctx)                                                     \
+    default:                                                                   \
+        _alia_switch_block.activate_case("_alia_default_case");                \
+        goto ALIA_CONCATENATE(_alia_dummy_label_, __LINE__);                   \
+        ALIA_CONCATENATE(_alia_dummy_label_, __LINE__)
+
+#define ALIA_DEFAULT ALIA_DEFAULT_(ctx)
+
+#ifdef ALIA_LOWERCASE_MACROS
+#define alia_switch_(ctx, x) ALIA_SWITCH_(ctx, x)
+#define alia_switch(x) ALIA_SWITCH(x)
+#define alia_case_(ctx, c) ALIA_CASE(ctx, c)
+#define alia_case(c) ALIA_CASE(c)
+#define alia_default_(ctx) ALIA_DEFAULT_(ctx)
+#define alia_default ALIA_DEFAULT
+#endif
+
+// for
+
+#define ALIA_FOR_(ctx, x)                                                      \
+    {                                                                          \
+        {                                                                      \
+            ::alia::loop_block _alia_looper(get_data_traversal(ctx));          \
+            for (x)                                                            \
+            {                                                                  \
+                ::alia::scoped_data_block _alia_scope;                         \
+                _alia_scope.begin(                                             \
+                    _alia_looper.traversal(), _alia_looper.block());           \
+                _alia_looper.next();
+
+#define ALIA_FOR(x) ALIA_FOR_(ctx, x)
+
+#ifdef ALIA_LOWERCASE_MACROS
+#define alia_for_(ctx, x) ALIA_FOR_(ctx, x)
+#define alia_for(x) ALIA_FOR(x)
+#endif
+
+// while
+
+#define ALIA_WHILE_(ctx, x)                                                    \
+    {                                                                          \
+        {                                                                      \
+            ::alia::loop_block _alia_looper(get_data_traversal(ctx));          \
+            while (x)                                                          \
+            {                                                                  \
+                ::alia::scoped_data_block _alia_scope;                         \
+                _alia_scope.begin(                                             \
+                    _alia_looper.traversal(), _alia_looper.block());           \
+                _alia_looper.next();
+
+#define ALIA_WHILE(x) ALIA_WHILE_(ctx, x)
+
+#ifdef ALIA_LOWERCASE_MACROS
+#define alia_while_(ctx, x) ALIA_WHILE_(ctx, x)
+#define alia_while(x) ALIA_WHILE(x)
+#endif
+
+// end
+
+#define ALIA_END                                                               \
+    }                                                                          \
+    }                                                                          \
+    }
+
+#ifdef ALIA_LOWERCASE_MACROS
+#define alia_end ALIA_END
+#endif
+
+// The following macros are substitutes for normal C++ control flow statements.
+// Unlike alia_if and company, they do NOT track control flow. Instead, they
+// convert your context variable to a dataless_context within the block.
+// This means that any attempt to retrieve data within the block will result
+// in an error (as it should).
+
+#define ALIA_REMOVE_DATA_TRACKING(ctx)                                         \
+    typename decltype(ctx)::storage_type _alia_storage;                        \
+    auto _alia_ctx                                                             \
+        = alia::remove_component<data_traversal_tag>(&_alia_storage, ctx);     \
+    auto ctx = _alia_ctx;
+
+#define ALIA_UNTRACKED_IF_(ctx, condition)                                     \
+    if (alia::condition_is_true(condition))                                    \
+    {                                                                          \
+        ALIA_REMOVE_DATA_TRACKING(ctx)                                         \
+        {                                                                      \
+            {
+
+#define ALIA_UNTRACKED_IF(condition) ALIA_UNTRACKED_IF_(ctx, condition)
+
+#define ALIA_UNTRACKED_ELSE_IF_(ctx, condition)                                \
+    }                                                                          \
+    }                                                                          \
+    }                                                                          \
+    else if (alia::condition_is_true(condition))                               \
+    {                                                                          \
+        ALIA_REMOVE_DATA_TRACKING(ctx)                                         \
+        {                                                                      \
+            {
+
+#define ALIA_UNTRACKED_ELSE_IF(condition)                                      \
+    ALIA_UNTRACKED_ELSE_IF_(ctx, condition)
+
+#define ALIA_UNTRACKED_ELSE_(ctx)                                              \
+    }                                                                          \
+    }                                                                          \
+    }                                                                          \
+    else                                                                       \
+    {                                                                          \
+        ALIA_REMOVE_DATA_TRACKING(ctx)                                         \
+        {                                                                      \
+            {
+
+#define ALIA_UNTRACKED_ELSE ALIA_UNTRACKED_ELSE_(ctx)
+
+#ifdef ALIA_LOWERCASE_MACROS
+
+#define alia_untracked_if_(ctx, condition) ALIA_UNTRACKED_IF_(ctx, condition)
+#define alia_untracked_if(condition) ALIA_UNTRACKED_IF(condition)
+#define alia_untracked_else_if_(ctx, condition)                                \
+    ALIA_UNTRACKED_ELSE_IF_(ctx, condition)
+#define alia_untracked_else_if(condition) ALIA_UNTRACKED_ELSE_IF(condition)
+#define alia_untracked_else_(ctx) ALIA_UNTRACKED_ELSE(ctx)
+#define alia_untracked_else ALIA_UNTRACKED_ELSE
+
+#endif
+
+#define ALIA_UNTRACKED_SWITCH_(ctx, expression)                                \
+    {                                                                          \
+        {                                                                      \
+            auto _alia_value = (expression);                                   \
+            ALIA_REMOVE_DATA_TRACKING(ctx)                                     \
+            switch (_alia_value)                                               \
+            {
+
+#define ALIA_UNTRACKED_SWITCH(expression)                                      \
+    ALIA_UNTRACKED_SWITCH_(ctx, expression)
+
+#ifdef ALIA_LOWERCASE_MACROS
+
+#define alia_untracked_switch_(ctx, x) ALIA_UNTRACKED_SWITCH_(ctx, x)
+#define alia_untracked_switch(x) ALIA_UNTRACKED_SWITCH(x)
+
+#endif
+
+} // namespace alia
+
+
 // This file implements utilities for routing events through an alia content
 // traversal function.
 //
@@ -3929,8 +4270,9 @@ struct event_traversal
     void* event;
 };
 
-inline routing_region_ptr
-get_active_routing_region(context ctx)
+template<class Context>
+routing_region_ptr
+get_active_routing_region(Context ctx)
 {
     event_traversal& traversal = get_event_traversal(ctx);
     return traversal.active_region ? *traversal.active_region
@@ -4016,6 +4358,18 @@ detect_event(context ctx, Event** event)
         return true;
     }
     return false;
+}
+
+template<class Event, class Context, class Handler>
+void
+handle_event(Context ctx, Handler const& handler)
+{
+    Event* e;
+    ALIA_UNTRACKED_IF(detect_event(ctx, &e))
+    {
+        handler(ctx, *e);
+    }
+    ALIA_END
 }
 
 } // namespace alia
@@ -4352,215 +4706,6 @@ simplified_id_wrapper<Wrapped>
 simplify_id(Wrapped const& wrapped)
 {
     return simplified_id_wrapper<Wrapped>(wrapped);
-}
-
-} // namespace alia
-
-
-
-// This file defines various utilities for constructing basic signals.
-
-namespace alia {
-
-// empty<Value>() gives a signal that never has a value.
-template<class Value>
-struct empty_signal : signal<empty_signal<Value>, Value, bidirectional_signal>
-{
-    empty_signal()
-    {
-    }
-    id_interface const&
-    value_id() const
-    {
-        return no_id;
-    }
-    bool
-    is_readable() const
-    {
-        return false;
-    }
-    // Since this is never readable, read() should never be called.
-    // LCOV_EXCL_START
-    Value const&
-    read() const
-    {
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wnull-dereference"
-#endif
-        return *(Value const*) nullptr;
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
-    }
-    // LCOV_EXCL_STOP
-    bool
-    is_writable() const
-    {
-        return false;
-    }
-    // Since this is never writable, write() should never be called.
-    // LCOV_EXCL_START
-    void
-    write(Value const& value) const
-    {
-    }
-    // LCOV_EXCL_STOP
-};
-template<class Value>
-empty_signal<Value>
-empty()
-{
-    return empty_signal<Value>();
-}
-
-// value(v) creates a read-only signal that carries the value v.
-template<class Value>
-struct value_signal
-    : regular_signal<value_signal<Value>, Value, read_only_signal>
-{
-    explicit value_signal(Value const& v) : v_(v)
-    {
-    }
-    bool
-    is_readable() const
-    {
-        return true;
-    }
-    Value const&
-    read() const
-    {
-        return v_;
-    }
-
- private:
-    Value v_;
-};
-template<class Value>
-value_signal<Value>
-value(Value const& v)
-{
-    return value_signal<Value>(v);
-}
-
-// This is a special overload of value() for C-style string literals.
-struct string_literal_signal
-    : signal<string_literal_signal, std::string, read_only_signal>
-{
-    string_literal_signal(char const* x) : text_(x)
-    {
-    }
-    id_interface const&
-    value_id() const
-    {
-        return unit_id;
-    }
-    bool
-    is_readable() const
-    {
-        return true;
-    }
-    std::string const&
-    read() const
-    {
-        return lazy_reader_.read([&] { return std::string(text_); });
-    }
-
- private:
-    char const* text_;
-    lazy_reader<std::string> lazy_reader_;
-};
-inline string_literal_signal
-value(char const* text)
-{
-    return string_literal_signal(text);
-}
-
-// literal operators
-namespace literals {
-inline value_signal<unsigned long long int>
-operator"" _a(unsigned long long int n)
-{
-    return value(n);
-}
-inline value_signal<long double> operator"" _a(long double n)
-{
-    return value(n);
-}
-inline string_literal_signal operator"" _a(char const* s, size_t n)
-{
-    return string_literal_signal(s);
-}
-} // namespace literals
-
-// direct(x), where x is a non-const reference, creates a bidirectional signal
-// that directly exposes the value of x.
-template<class Value>
-struct direct_signal
-    : regular_signal<direct_signal<Value>, Value, bidirectional_signal>
-{
-    explicit direct_signal(Value* v) : v_(v)
-    {
-    }
-    bool
-    is_readable() const
-    {
-        return true;
-    }
-    Value const&
-    read() const
-    {
-        return *v_;
-    }
-    bool
-    is_writable() const
-    {
-        return true;
-    }
-    void
-    write(Value const& value) const
-    {
-        *v_ = value;
-    }
-
- private:
-    Value* v_;
-};
-template<class Value>
-direct_signal<Value>
-direct(Value& x)
-{
-    return direct_signal<Value>(&x);
-}
-
-// direct(x), where x is a const reference, creates a read-only signal that
-// directly exposes the value of x.
-template<class Value>
-struct direct_const_signal
-    : regular_signal<direct_const_signal<Value>, Value, read_only_signal>
-{
-    explicit direct_const_signal(Value const* v) : v_(v)
-    {
-    }
-    bool
-    is_readable() const
-    {
-        return true;
-    }
-    Value const&
-    read() const
-    {
-        return *v_;
-    }
-
- private:
-    Value const* v_;
-};
-template<class Value>
-direct_const_signal<Value>
-direct(Value const& x)
-{
-    return direct_const_signal<Value>(&x);
 }
 
 } // namespace alia
@@ -5360,6 +5505,16 @@ printf(context ctx, char const* format, Args const&... args)
 } // namespace alia
 
 #ifdef ALIA_IMPLEMENTATION
+
+namespace alia {
+
+bool
+is_refresh_pass(context ctx)
+{
+    return get_data_traversal(ctx).gc_enabled;
+}
+
+} // namespace alia
 #include <typeinfo>
 
 namespace alia {
@@ -5864,51 +6019,6 @@ scoped_data_traversal::end()
     root_map_.end();
 }
 
-if_block::if_block(data_traversal& traversal, bool condition)
-{
-    data_block* block;
-    get_data(traversal, &block);
-    if (condition)
-    {
-        scoped_data_block_.begin(traversal, *block);
-    }
-    else
-    {
-        if (traversal.cache_clearing_enabled)
-            clear_cached_data(*block);
-    }
-}
-
-pass_dependent_if_block::pass_dependent_if_block(
-    data_traversal& traversal, bool condition)
-{
-    data_block* block;
-    get_data(traversal, &block);
-    if (condition)
-    {
-        scoped_data_block_.begin(traversal, *block);
-    }
-}
-
-loop_block::loop_block(data_traversal& traversal)
-{
-    traversal_ = &traversal;
-    get_data(traversal, &block_);
-}
-loop_block::~loop_block()
-{
-    // The current block is the one we were expecting to use for the next
-    // iteration, but since the destructor is being invoked, there won't be a
-    // next iteration, which means we should clear out that block.
-    if (!std::uncaught_exception())
-        clear_data_block(*block_);
-}
-void
-loop_block::next()
-{
-    get_data(*traversal_, &block_);
-}
-
 } // namespace alia
 
 namespace alia {
@@ -5993,6 +6103,44 @@ route_event(system& sys, event_traversal& traversal, routing_region* target)
     {
         invoke_controller(sys, traversal);
     }
+}
+
+} // namespace alia
+
+namespace alia {
+
+if_block::if_block(data_traversal& traversal, bool condition)
+{
+    data_block* block;
+    get_data(traversal, &block);
+    if (condition)
+    {
+        scoped_data_block_.begin(traversal, *block);
+    }
+    else
+    {
+        if (traversal.cache_clearing_enabled)
+            clear_cached_data(*block);
+    }
+}
+
+loop_block::loop_block(data_traversal& traversal)
+{
+    traversal_ = &traversal;
+    get_data(traversal, &block_);
+}
+loop_block::~loop_block()
+{
+    // The current block is the one we were expecting to use for the next
+    // iteration, but since the destructor is being invoked, there won't be a
+    // next iteration, which means we should clear out that block.
+    if (!std::uncaught_exception())
+        clear_data_block(*block_);
+}
+void
+loop_block::next()
+{
+    get_data(*traversal_, &block_);
 }
 
 } // namespace alia
