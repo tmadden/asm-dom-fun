@@ -136,34 +136,15 @@ refresh()
 void
 refresh();
 
-int i = 1;
-
 std::vector<std::string> actions;
-
-bool decrease(emscripten::val)
-{
-    i--;
-    actions.push_back("decrease");
-    refresh();
-    return true;
-}
-
-bool increase(emscripten::val)
-{
-    i++;
-    actions.push_back("increase");
-    refresh();
-    return true;
-}
 
 void
 do_ui(context ctx)
 {
-    std::cout << "do_ui" << std::endl;
-    static int n = 1;
-    do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), direct(n)));
-    do_button(ctx, "increase"_a, direct(n) <<= direct(n) + 1_a);
-    do_button(ctx, "decrease"_a, direct(n) <<= direct(n) - 1_a);
+    auto n = get_state(ctx, 1_a);
+    do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), n));
+    do_button(ctx, "increase"_a, ++n);
+    do_button(ctx, "decrease"_a, --n);
 }
 
 // void
