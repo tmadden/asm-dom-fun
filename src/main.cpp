@@ -50,6 +50,14 @@ struct click_event
     widget_id id;
 };
 
+using std::string;
+
+struct value_update_event
+{
+    widget_id id;
+    string value;
+};
+
 void
 refresh();
 
@@ -60,6 +68,84 @@ do_text(context ctx, readable<std::string> text)
         if (signal_is_readable(text))
         {
             e.current_children->push_back(asmdom::h("h4", read_signal(text)));
+        }
+    });
+}
+
+struct input_data
+{
+    captured_id external_id;
+    string value;
+};
+
+void
+do_number_input(context ctx, bidirectional<string> value)
+{
+    input_data* data;
+    get_cached_data(ctx, &data);
+
+    if (!data->external_id.matches(value.value_id()))
+    {
+        auto new_value
+            = signal_is_readable(value) ? read_signal(value) : string();
+        // It's possible that we actually caused the change in the external text
+        // (e.g., when we're immediately sending out changes), so if we already
+        // have the new value, don't actually reset.
+        if (data->value != new_value)
+        {
+            // TODO: What is the reset logic here? Is there any?
+            data->value = new_value;
+        }
+    }
+
+    auto id = get_widget_id(ctx);
+    auto route = get_active_routing_region(ctx);
+
+    handle_event<refresh_event>(ctx, [=](auto ctx, auto& e) {
+        if (signal_is_readable(value))
+        {
+            e.current_children->push_back(asmdom::h(
+                "input",
+                asmdom::Data(
+                    asmdom::Attrs{{"type", "number"}},
+                    asmdom::Props{
+                        {"value", emscripten::val(read_signal(value))}},
+                    asmdom::Callbacks{
+                        {"oninput", [=](emscripten::val e) {
+                             auto start = std::chrono::system_clock::now();
+
+                             value_update_event update;
+                             update.id = id;
+                             update.value
+                                 = e["target"]["value"].as<std::string>();
+                             dispatch_targeted_event(the_system, update, route);
+                             refresh();
+
+                             auto end = std::chrono::system_clock::now();
+
+                             std::chrono::duration<double> elapsed_seconds
+                                 = end - start;
+                             std::time_t end_time
+                                 = std::chrono::system_clock::to_time_t(end);
+
+                             std::cout
+                                 << "finished computation at "
+                                 << std::ctime(&end_time)
+                                 << "elapsed time: " << elapsed_seconds.count()
+                                 << "s\n";
+
+                             return true;
+                         }}})));
+        }
+    });
+    handle_event<value_update_event>(ctx, [=](auto ctx, auto& e) {
+        {
+            if (e.id == id)
+            {
+                if (signal_is_writable(value))
+                    write_signal(value, e.value);
+                data->value = e.value;
+            }
         }
     });
 }
@@ -145,6 +231,12 @@ do_ui(context ctx)
     do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), n));
     do_button(ctx, "increase"_a, ++n);
     do_button(ctx, "decrease"_a, --n);
+
+    auto x = get_state(ctx, "7"_a);
+    do_text(ctx, x);
+    do_number_input(ctx, x);
+    // ctx, fake_writability(apply(ctx, ALIA_LAMBDIFY(std::to_string), n)));
+    do_button(ctx, "reset"_a, x <<= "4"_a);
 }
 
 // void
