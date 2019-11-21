@@ -18,10 +18,200 @@
 #define ALIA_LOWERCASE_MACROS
 #include "alia.hpp"
 
-///////
+using std::string;
 
 using namespace alia;
 using namespace alia::literals;
+
+/////
+
+// When an accessor is set to a value, it's allowed to throw a validation
+// error if the value is not acceptable.
+// It should include a message that's presentable to the user.
+struct validation_error : exception
+{
+    validation_error(string const& message) : exception(message)
+    {
+    }
+    ~validation_error() throw()
+    {
+    }
+};
+
+//
+
+// TEXT CONVERSION
+
+// All conversion of values to and from text goes through the functions
+// from_string and to_string. In order to use a particular value type with
+// the text-based widgets and utilities provided here, that type must
+// implement these functions.
+
+#define ALIA_DECLARE_STRING_CONVERSIONS(T)                                     \
+    void from_string(T* value, string const& s);                               \
+    string to_string(T value);
+
+// from_string(value, s) should parse the string s and store it in *value.
+// It should throw a validation_error if the string doesn't parse.
+
+// to_string(value) should simply return the string form of value.
+
+// Implementations of from_string and to_string are provided for the following
+// types.
+
+ALIA_DECLARE_STRING_CONVERSIONS(int)
+ALIA_DECLARE_STRING_CONVERSIONS(unsigned)
+ALIA_DECLARE_STRING_CONVERSIONS(float)
+ALIA_DECLARE_STRING_CONVERSIONS(double)
+ALIA_DECLARE_STRING_CONVERSIONS(size_t)
+
+// as_text(ctx, x) creates a text-based interface to the accessor x.
+template<class Readable>
+void
+update_text_conversion(keyed_data<string>* data, Readable x)
+{
+    if (signal_is_readable(x))
+    {
+        refresh_keyed_data(*data, x.value_id());
+        if (!is_valid(*data))
+            set(*data, to_string(read_signal(x)));
+    }
+    else
+    {
+        invalidate(*data);
+    }
+}
+template<class Readable>
+keyed_data_signal<string>
+as_text(context ctx, Readable x)
+{
+    keyed_data<string>* data;
+    get_cached_data(ctx, &data);
+    update_text_conversion(data, x);
+    return keyed_data_signal<string>(data);
+}
+
+// as_bidirectional_text(ctx, x) is similar to as_text but it's bidirectional.
+template<class Wrapped>
+struct bidirectional_text_signal : signal<
+                                       bidirectional_text_signal<Wrapped>,
+                                       string,
+                                       typename Wrapped::direction_tag>
+{
+    bidirectional_text_signal(Wrapped wrapped, keyed_data<string>* data)
+        : wrapped_(wrapped), data_(data)
+    {
+    }
+    bool
+    is_readable() const
+    {
+        return is_valid(*data_);
+    }
+    string const&
+    read() const
+    {
+        return get(*data_);
+    }
+    id_interface const&
+    value_id() const
+    {
+        return wrapped_.value_id();
+    }
+    bool
+    is_writable() const
+    {
+        return wrapped_.is_writable();
+    }
+    void
+    write(string const& s) const
+    {
+        typename Wrapped::value_type value;
+        from_string(&value, s);
+        wrapped_.write(value);
+    }
+
+ private:
+    keyed_data<string>* data_;
+    Wrapped wrapped_;
+};
+template<class Signal>
+bidirectional_text_signal<Signal>
+as_bidirectional_text(context& ctx, Signal x)
+{
+    keyed_data<string>* data;
+    get_cached_data(ctx, &data);
+    update_text_conversion(data, x);
+    return bidirectional_text_signal<Signal>(x, data);
+}
+
+//
+
+template<class T>
+bool
+string_to_value(string const& str, T* value)
+{
+    std::istringstream s(str);
+    T x;
+    if (!(s >> x))
+        return false;
+    s >> std::ws;
+    if (s.eof())
+    {
+        *value = x;
+        return true;
+    }
+    return false;
+}
+
+template<class T>
+void
+float_from_string(T* value, string const& str)
+{
+    if (!string_to_value(str, value))
+        throw validation_error("This input expects a number.");
+}
+
+#define ALIA_FLOAT_CONVERSIONS(T)                                              \
+    void from_string(T* value, string const& str)                              \
+    {                                                                          \
+        float_from_string(value, str);                                         \
+    }                                                                          \
+    string to_string(T value)                                                  \
+    {                                                                          \
+        return std::to_string(value);                                          \
+    }
+
+ALIA_FLOAT_CONVERSIONS(float)
+ALIA_FLOAT_CONVERSIONS(double)
+
+template<class T>
+void
+integer_from_string(T* value, string const& str)
+{
+    long long n;
+    if (!string_to_value(str, &n))
+        throw validation_error("This input expects an integer.");
+    T x = T(n);
+    if (x != n)
+        throw validation_error("This integer is outside the supported range.");
+    *value = x;
+}
+
+#define ALIA_INTEGER_CONVERSIONS(T)                                            \
+    void from_string(T* value, string const& str)                              \
+    {                                                                          \
+        integer_from_string(value, str);                                       \
+    }                                                                          \
+    string to_string(T value)                                                  \
+    {                                                                          \
+        return std::to_string(value);                                          \
+    }
+
+ALIA_INTEGER_CONVERSIONS(int)
+ALIA_INTEGER_CONVERSIONS(unsigned)
+ALIA_INTEGER_CONVERSIONS(size_t)
+
+///////
 
 alia::system the_system;
 
@@ -50,8 +240,6 @@ struct click_event
     widget_id id;
 };
 
-using std::string;
-
 struct value_update_event
 {
     widget_id id;
@@ -67,7 +255,7 @@ do_text(context ctx, readable<std::string> text)
     handle_event<refresh_event>(ctx, [text](auto ctx, auto& e) {
         if (signal_is_readable(text))
         {
-            e.current_children->push_back(asmdom::h("h4", read_signal(text)));
+            e.current_children->push_back(asmdom::h("p", read_signal(text)));
         }
     });
 }
@@ -76,10 +264,11 @@ struct input_data
 {
     captured_id external_id;
     string value;
+    bool reset = false;
 };
 
 void
-do_number_input(context ctx, bidirectional<string> value)
+do_number_input_(context ctx, bidirectional<string> value)
 {
     input_data* data;
     get_cached_data(ctx, &data);
@@ -93,8 +282,9 @@ do_number_input(context ctx, bidirectional<string> value)
         // have the new value, don't actually reset.
         if (data->value != new_value)
         {
-            // TODO: What is the reset logic here? Is there any?
+            data->reset = true;
             data->value = new_value;
+            std::cout << "reset\n";
         }
         data->external_id.capture(value.value_id());
     }
@@ -105,12 +295,17 @@ do_number_input(context ctx, bidirectional<string> value)
     handle_event<refresh_event>(ctx, [=](auto ctx, auto& e) {
         if (signal_is_readable(value))
         {
+            asmdom::Props props;
+            if (data->reset)
+            {
+                props = asmdom::Props{
+                    {"value", emscripten::val(read_signal(value))}};
+            }
             e.current_children->push_back(asmdom::h(
                 "input",
                 asmdom::Data(
                     asmdom::Attrs{{"type", "number"}},
-                    asmdom::Props{
-                        {"value", emscripten::val(read_signal(value))}},
+                    props,
                     asmdom::Callbacks{
                         {"oninput", [=](emscripten::val e) {
                              auto start = std::chrono::system_clock::now();
@@ -137,6 +332,7 @@ do_number_input(context ctx, bidirectional<string> value)
 
                              return true;
                          }}})));
+            data->reset = false;
         }
     });
     handle_event<value_update_event>(ctx, [=](auto ctx, auto& e) {
@@ -149,6 +345,13 @@ do_number_input(context ctx, bidirectional<string> value)
             }
         }
     });
+}
+
+template<class Signal>
+void
+do_number_input(context ctx, Signal value)
+{
+    do_number_input_(ctx, as_bidirectional_text(ctx, value));
 }
 
 void
@@ -228,16 +431,42 @@ std::vector<std::string> actions;
 void
 do_ui(context ctx)
 {
-    auto n = get_state(ctx, 1_a);
-    do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), n));
-    do_button(ctx, "increase"_a, ++n);
-    do_button(ctx, "decrease"_a, --n);
+    // auto n = get_state(ctx, 1_a);
+    // do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), n));
+    // do_button(ctx, "increase"_a, ++n);
+    // do_button(ctx, "decrease"_a, --n);
 
-    auto x = get_state(ctx, "7"_a);
-    do_text(ctx, x);
-    do_number_input(ctx, x);
-    // fake_writability(apply(ctx, ALIA_LAMBDIFY(std::to_string), n)));
-    do_button(ctx, "reset"_a, x <<= "4"_a);
+    // auto x = get_state(ctx, "7"_a);
+    // do_text(ctx, x);
+    // do_number_input(ctx, x);
+    // // fake_writability(apply(ctx, ALIA_LAMBDIFY(std::to_string), n)));
+    // do_button(ctx, "reset"_a, x <<= "4"_a);
+
+    // Get the state we need.
+    auto bill = get_state(ctx, empty<double>()); // defaults to uninitialized
+    auto tip_percentage = get_state(ctx, value(20.)); // defaults to 20%
+
+    // Show some controls for manipulating our state.
+    do_number_input(ctx, bill);
+    do_number_input(ctx, tip_percentage);
+
+    // Do some reactive calculations.
+    auto tip = bill * tip_percentage / value(100.);
+    auto total = bill + tip;
+
+    // Show the results.
+    do_text(ctx, printf(ctx, "tip: %.2f", tip));
+    do_text(ctx, printf(ctx, "total: %.2f", total));
+
+    // Allow the user to split the bill.
+    auto n_people = get_state(ctx, value(1.));
+    do_number_input(ctx, n_people);
+    alia_if(n_people > value(1))
+    {
+        do_text(ctx, printf(ctx, "tip per person: %.2f", tip / n_people));
+        do_text(ctx, printf(ctx, "total per person: %.2f", total / n_people));
+    }
+    alia_end
 }
 
 // void
