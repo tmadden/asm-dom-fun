@@ -164,6 +164,15 @@ string_to_value(string const& str, T* value)
 }
 
 template<class T>
+string
+value_to_string(T const& value)
+{
+    std::ostringstream s;
+    s << value;
+    return s.str();
+}
+
+template<class T>
 void
 float_from_string(T* value, string const& str)
 {
@@ -178,7 +187,7 @@ float_from_string(T* value, string const& str)
     }                                                                          \
     string to_string(T value)                                                  \
     {                                                                          \
-        return std::to_string(value);                                          \
+        return value_to_string(value);                                         \
     }
 
 ALIA_FLOAT_CONVERSIONS(float)
@@ -204,7 +213,7 @@ integer_from_string(T* value, string const& str)
     }                                                                          \
     string to_string(T value)                                                  \
     {                                                                          \
-        return std::to_string(value);                                          \
+        return value_to_string(value);                                         \
     }
 
 ALIA_INTEGER_CONVERSIONS(int)
