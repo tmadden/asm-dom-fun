@@ -96,6 +96,7 @@ do_number_input(context ctx, bidirectional<string> value)
             // TODO: What is the reset logic here? Is there any?
             data->value = new_value;
         }
+        data->external_id.capture(value.value_id());
     }
 
     auto id = get_widget_id(ctx);
@@ -235,7 +236,7 @@ do_ui(context ctx)
     auto x = get_state(ctx, "7"_a);
     do_text(ctx, x);
     do_number_input(ctx, x);
-    // ctx, fake_writability(apply(ctx, ALIA_LAMBDIFY(std::to_string), n)));
+    // fake_writability(apply(ctx, ALIA_LAMBDIFY(std::to_string), n)));
     do_button(ctx, "reset"_a, x <<= "4"_a);
 }
 
