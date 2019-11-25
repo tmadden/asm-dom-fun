@@ -59,11 +59,16 @@ struct validation_error : exception
 // Implementations of from_string and to_string are provided for the following
 // types.
 
+ALIA_DECLARE_STRING_CONVERSIONS(short int)
+ALIA_DECLARE_STRING_CONVERSIONS(unsigned short int)
 ALIA_DECLARE_STRING_CONVERSIONS(int)
-ALIA_DECLARE_STRING_CONVERSIONS(unsigned)
+ALIA_DECLARE_STRING_CONVERSIONS(unsigned int)
+ALIA_DECLARE_STRING_CONVERSIONS(long int)
+ALIA_DECLARE_STRING_CONVERSIONS(unsigned long int)
+ALIA_DECLARE_STRING_CONVERSIONS(long long int)
+ALIA_DECLARE_STRING_CONVERSIONS(unsigned long long int)
 ALIA_DECLARE_STRING_CONVERSIONS(float)
 ALIA_DECLARE_STRING_CONVERSIONS(double)
-ALIA_DECLARE_STRING_CONVERSIONS(size_t)
 
 // as_text(ctx, x) creates a text-based interface to the accessor x.
 template<class Readable>
@@ -91,6 +96,40 @@ as_text(context ctx, Readable x)
     return keyed_data_signal<string>(data);
 }
 
+template<class Value>
+struct bidirectional_text_data
+{
+    captured_id input_id;
+    Value input_value;
+    bool output_valid = false;
+    std::string output_text;
+    counter_type output_version = 1;
+};
+
+template<class Value, class Readable>
+void
+update_bidirectional_text(bidirectional_text_data<Value>* data, Readable x)
+{
+    if (signal_is_readable(x))
+    {
+        auto const& input_id = x.value_id();
+        if (!data->input_id.matches(input_id))
+        {
+            if (!data->output_valid || read_signal(x) != data->input_value)
+            {
+                data->output_text = to_string(read_signal(x));
+                data->output_valid = true;
+                ++data->output_version;
+            }
+            data->input_id.capture(input_id);
+        }
+    }
+    else
+    {
+        data->output_valid = false;
+    }
+}
+
 // as_bidirectional_text(ctx, x) is similar to as_text but it's bidirectional.
 template<class Wrapped>
 struct bidirectional_text_signal : signal<
@@ -98,24 +137,27 @@ struct bidirectional_text_signal : signal<
                                        string,
                                        typename Wrapped::direction_tag>
 {
-    bidirectional_text_signal(Wrapped wrapped, keyed_data<string>* data)
+    bidirectional_text_signal(
+        Wrapped wrapped,
+        bidirectional_text_data<typename Wrapped::value_type>* data)
         : wrapped_(wrapped), data_(data)
     {
     }
     bool
     is_readable() const
     {
-        return is_valid(*data_);
+        return data_->output_valid;
     }
     string const&
     read() const
     {
-        return get(*data_);
+        return data_->output_text;
     }
     id_interface const&
     value_id() const
     {
-        return wrapped_.value_id();
+        id_ = make_id(data_->output_version);
+        return id_;
     }
     bool
     is_writable() const
@@ -125,22 +167,26 @@ struct bidirectional_text_signal : signal<
     void
     write(string const& s) const
     {
+        data_->output_text = s;
+        ++data_->output_version;
         typename Wrapped::value_type value;
         from_string(&value, s);
+        data_->input_value = value;
         wrapped_.write(value);
     }
 
  private:
-    keyed_data<string>* data_;
+    mutable simple_id<counter_type> id_;
+    bidirectional_text_data<typename Wrapped::value_type>* data_;
     Wrapped wrapped_;
 };
 template<class Signal>
 bidirectional_text_signal<Signal>
 as_bidirectional_text(context& ctx, Signal x)
 {
-    keyed_data<string>* data;
+    bidirectional_text_data<typename Signal::value_type>* data;
     get_cached_data(ctx, &data);
-    update_text_conversion(data, x);
+    update_bidirectional_text(data, x);
     return bidirectional_text_signal<Signal>(x, data);
 }
 
@@ -216,9 +262,14 @@ integer_from_string(T* value, string const& str)
         return value_to_string(value);                                         \
     }
 
+ALIA_INTEGER_CONVERSIONS(short int)
+ALIA_INTEGER_CONVERSIONS(unsigned short int)
 ALIA_INTEGER_CONVERSIONS(int)
-ALIA_INTEGER_CONVERSIONS(unsigned)
-ALIA_INTEGER_CONVERSIONS(size_t)
+ALIA_INTEGER_CONVERSIONS(unsigned int)
+ALIA_INTEGER_CONVERSIONS(long int)
+ALIA_INTEGER_CONVERSIONS(unsigned long int)
+ALIA_INTEGER_CONVERSIONS(long long int)
+ALIA_INTEGER_CONVERSIONS(unsigned long long int)
 
 ///////
 
@@ -264,7 +315,12 @@ do_text(context ctx, readable<std::string> text)
     handle_event<refresh_event>(ctx, [text](auto ctx, auto& e) {
         if (signal_is_readable(text))
         {
+            std::cout << read_signal(text) << std::endl;
             e.current_children->push_back(asmdom::h("p", read_signal(text)));
+        }
+        else
+        {
+            std::cout << "text not readable" << std::endl;
         }
     });
 }
@@ -273,7 +329,6 @@ struct input_data
 {
     captured_id external_id;
     string value;
-    bool reset = false;
 };
 
 void
@@ -282,74 +337,68 @@ do_number_input_(context ctx, bidirectional<string> value)
     input_data* data;
     get_cached_data(ctx, &data);
 
-    if (!data->external_id.matches(value.value_id()))
+    if (signal_is_readable(value))
     {
-        auto new_value
-            = signal_is_readable(value) ? read_signal(value) : string();
-        // It's possible that we actually caused the change in the external text
-        // (e.g., when we're immediately sending out changes), so if we already
-        // have the new value, don't actually reset.
-        if (data->value != new_value)
+        if (!data->external_id.matches(value.value_id()))
         {
-            data->reset = true;
-            data->value = new_value;
-            std::cout << "reset\n";
+            data->value = read_signal(value);
+            data->external_id.capture(value.value_id());
         }
-        data->external_id.capture(value.value_id());
+    }
+    else
+    {
+        // Same logic as above, but consider the external text to be the empty
+        // string with no ID.
+        if (!data->external_id.matches(no_id))
+        {
+            data->value = string();
+            data->external_id.capture(no_id);
+        }
     }
 
     auto id = get_widget_id(ctx);
     auto route = get_active_routing_region(ctx);
 
     handle_event<refresh_event>(ctx, [=](auto ctx, auto& e) {
-        if (signal_is_readable(value))
-        {
-            asmdom::Props props;
-            if (data->reset)
-            {
-                props = asmdom::Props{
-                    {"value", emscripten::val(read_signal(value))}};
-            }
-            e.current_children->push_back(asmdom::h(
-                "input",
-                asmdom::Data(
-                    asmdom::Attrs{{"type", "number"}},
-                    props,
-                    asmdom::Callbacks{
-                        {"oninput", [=](emscripten::val e) {
-                             auto start = std::chrono::system_clock::now();
+        e.current_children->push_back(asmdom::h(
+            "input",
+            asmdom::Data(
+                asmdom::Attrs{{"type", "number"}},
+                asmdom::Props{{"value", emscripten::val(data->value)}},
+                asmdom::Callbacks{
+                    {"oninput", [=](emscripten::val e) {
+                         auto start = std::chrono::system_clock::now();
 
-                             value_update_event update;
-                             update.id = id;
-                             update.value
-                                 = e["target"]["value"].as<std::string>();
-                             dispatch_targeted_event(the_system, update, route);
-                             refresh();
+                         value_update_event update;
+                         update.id = id;
+                         update.value = e["target"]["value"].as<std::string>();
+                         dispatch_targeted_event(the_system, update, route);
+                         refresh();
 
-                             auto end = std::chrono::system_clock::now();
+                         std::cout << update.value << std::endl;
 
-                             std::chrono::duration<double> elapsed_seconds
-                                 = end - start;
-                             std::time_t end_time
-                                 = std::chrono::system_clock::to_time_t(end);
+                         auto end = std::chrono::system_clock::now();
 
-                             std::cout
-                                 << "finished computation at "
-                                 << std::ctime(&end_time)
-                                 << "elapsed time: " << elapsed_seconds.count()
-                                 << "s\n";
+                         std::chrono::duration<double> elapsed_seconds
+                             = end - start;
+                         std::cout
+                             << "elapsed time: " << elapsed_seconds.count()
+                             << "s\n";
 
-                             return true;
-                         }}})));
-            data->reset = false;
-        }
+                         return true;
+                     }}})));
     });
     handle_event<value_update_event>(ctx, [=](auto ctx, auto& e) {
         {
+            std::cout << "UPDATE!: " << e.value << std::endl;
             if (e.id == id)
             {
+                std::cout << "ID matched" << std::endl;
                 if (signal_is_writable(value))
+                {
+                    std::cout << "signal writable" << std::endl;
                     write_signal(value, e.value);
+                }
                 data->value = e.value;
             }
         }
@@ -389,12 +438,7 @@ do_button(context ctx, readable<std::string> text, action<> on_click)
 
                              std::chrono::duration<double> elapsed_seconds
                                  = end - start;
-                             std::time_t end_time
-                                 = std::chrono::system_clock::to_time_t(end);
-
                              std::cout
-                                 << "finished computation at "
-                                 << std::ctime(&end_time)
                                  << "elapsed time: " << elapsed_seconds.count()
                                  << "s\n";
 
@@ -423,6 +467,8 @@ refresh()
 
     dispatch_event(the_system, event);
 
+    std::cout << children.size() << std::endl;
+
     asmdom::VNode* root = asmdom::h(
         "div", asmdom::Data(asmdom::Attrs{{"class", "container"}}), children);
 
@@ -432,31 +478,46 @@ refresh()
 
 //////
 
-void
-refresh();
-
 std::vector<std::string> actions;
 
 void
 do_ui(context ctx)
 {
-    // auto n = get_state(ctx, 1_a);
+    // auto n = get_state(ctx, value(7));
     // do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), n));
     // do_button(ctx, "increase"_a, ++n);
     // do_button(ctx, "decrease"_a, --n);
 
-    // auto x = get_state(ctx, "7"_a);
-    // do_text(ctx, x);
-    // do_number_input(ctx, x);
-    // // fake_writability(apply(ctx, ALIA_LAMBDIFY(std::to_string), n)));
-    // do_button(ctx, "reset"_a, x <<= "4"_a);
+    // auto x = get_state(ctx, value(2));
+    // do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), x));
+    // do_number_input(ctx, fake_writability(x));
+    // do_button(ctx, "reset"_a, x <<= value(4));
 
     // Get the state we need.
     auto bill = get_state(ctx, empty<double>()); // defaults to uninitialized
     auto tip_percentage = get_state(ctx, value(20.)); // defaults to 20%
 
+    if (signal_is_readable(bill))
+    {
+        std::cout << "bill: " << read_signal(bill) << std::endl;
+    }
+    else
+    {
+        std::cout << "bill unreadable" << std::endl;
+    }
+    if (signal_is_readable(tip_percentage))
+    {
+        std::cout << "tip: " << read_signal(tip_percentage) << std::endl;
+    }
+    else
+    {
+        std::cout << "tip unreadable" << std::endl;
+    }
+
     // Show some controls for manipulating our state.
+    std::cout << "do bill" << std::endl;
     do_number_input(ctx, bill);
+    std::cout << "do tip" << std::endl;
     do_number_input(ctx, tip_percentage);
 
     // Do some reactive calculations.
