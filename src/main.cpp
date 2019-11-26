@@ -313,15 +313,8 @@ void
 do_text(context ctx, readable<std::string> text)
 {
     handle_event<refresh_event>(ctx, [text](auto ctx, auto& e) {
-        if (signal_is_readable(text))
-        {
-            std::cout << read_signal(text) << std::endl;
-            e.current_children->push_back(asmdom::h("p", read_signal(text)));
-        }
-        else
-        {
-            std::cout << "text not readable" << std::endl;
-        }
+        e.current_children->push_back(asmdom::h(
+            "p", signal_is_readable(text) ? read_signal(text) : string()));
     });
 }
 
