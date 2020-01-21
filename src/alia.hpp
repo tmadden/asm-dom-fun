@@ -114,818 +114,6 @@ using void_t = typename make_void<Ts...>::type;
 } // namespace alia
 
 
-
-#include <type_traits>
-#include <typeindex>
-#include <unordered_map>
-
-// This file provides a means for defining arbitrary collections of components
-// that constitute the context in which an application operates. The set of
-// components required for an application obviously varies across applications
-// (and even across modules within a complex application). The goal here is to
-// allow applications to freely mix together components from multiple sources
-// (which may not know about one another).
-//
-// Some additional design considerations follow. Note that these refer to
-// contexts rather than component collections, since that is the primary
-// motivating example of a component collection.
-//
-// 1. An application should be able to easily define its own components and mix
-// those into its context. This includes application-level state. If there is
-// state that is essentially global to the application (e.g., the active user),
-// application code should be able to retrieve this from the application
-// context. Similarly, a component of the application should be able to extend
-// the application's context with state that is specific to that component
-// (but ubiquitous within it).
-//
-// 2. Functions that take contexts as arguments should be able to define the set
-// of components that they require as part of the type signature of the context.
-// Any caller whose context includes a superset of those components should be
-// able to call the function with an implicit conversion of the context
-// parameter. This should all be possible without needing to define functions as
-// templates (otherwise alia-based applications would end up being entirely
-// header-based) and with minimal (ideally zero) runtime overhead in converting
-// the caller's context to the type expected by the function.
-//
-// 3. Retrieving frames/capabilities from a context should require minimal
-// (ideally zero) runtime overhead.
-//
-// 4. Static type checking of context conversions/retrievals should be
-// possible but optional. Developers should not have to pay these compile-time
-// costs unless it's desired. It should be possible to use a mixed workflow
-// where these checks are replaced by runtime checks for iterative development
-// but enabled for CI/release builds.
-//
-// In order to satisfy #4, this file looks for a #define called
-// ALIA_DYNAMIC_COMPONENT_CHECKING. If this is set, code related to statically
-// checking components is omitted and dynamic checks are substituted where
-// appropriate. Note that when ALIA_DYNAMIC_COMPONENT_CHECKING is NOT set,
-// ALIA_STATIC_COMPONENT_CHECKING is set and static checks are included.
-//
-// The statically typed component_collection object is a simple wrapper around
-// the dynamically typed storage object. It adds a compile-time type list
-// indicating what's actually supposed to be in the collection. This allows
-// collections to be converted to other collection types without any run-time
-// overhead. This does imply some run-time overhead for retrieving components
-// from the collection, but that can be mitigated by providing zero-cost
-// retrieval for select (core) components. This also implies that the collection
-// object must be passed by value (or const& - though there's no real point in
-// that) whereas passing by reference would be more obvious, but that seems
-// unavoidable given the requirements.
-
-#ifndef ALIA_DYNAMIC_COMPONENT_CHECKING
-#define ALIA_STATIC_COMPONENT_CHECKING
-#endif
-
-namespace alia {
-
-template<class Components, class Storage>
-struct component_collection;
-
-#ifdef ALIA_STATIC_COMPONENT_CHECKING
-
-namespace detail {
-
-// A component has a tag type and a data type associated with it. The tag
-// type is used only at compile time to identify the component while the data
-// type actually stores any run-time data associated with the component.
-template<class Tag, class Data>
-struct component
-{
-    typedef Tag tag;
-    typedef Data data_type;
-};
-
-// component_list<Components...> defines a simple compile-time list of
-// components. This is held by a component_collection to provide compile-time
-// tracking of its contents.
-template<class... Components>
-struct component_list
-{
-};
-
-// component_list_contains_tag<Tag,Components>::value yields a compile-time
-// boolean indicating whether or not :Components contains a component with a
-// tag matching :Tag.
-template<class List, class Tag>
-struct component_list_contains_tag
-{
-};
-// base case (list is empty, so :Tag not found)
-template<class Tag>
-struct component_list_contains_tag<component_list<>, Tag> : std::false_type
-{
-};
-// case where tag matches
-template<class Tag, class Data, class... Rest>
-struct component_list_contains_tag<
-    component_list<component<Tag, Data>, Rest...>,
-    Tag> : std::true_type
-{
-};
-// non-matching (recursive) case
-template<class Tag, class OtherTag, class Data, class... Rest>
-struct component_list_contains_tag<
-    component_list<component<OtherTag, Data>, Rest...>,
-    Tag> : component_list_contains_tag<component_list<Rest...>, Tag>
-{
-};
-
-// component_collection_contains_tag<Collection,Tag>::value yields a
-// compile-time boolean indicating whether or not :Collection contains an entry
-// with a tag matching :Tag.
-template<class Collection, class Tag>
-struct component_collection_contains_tag
-{
-};
-template<class Components, class Storage, class Tag>
-struct component_collection_contains_tag<
-    component_collection<Components, Storage>,
-    Tag> : component_list_contains_tag<Components, Tag>
-{
-};
-
-// list_contains_component<List,Component>::value yields a compile-time
-// boolean indicating whether or not :Component appears in the component_list
-// :List.
-template<class List, class Component>
-struct list_contains_component
-{
-};
-// base case (list is empty, so :Component not found)
-template<class Component>
-struct list_contains_component<component_list<>, Component> : std::false_type
-{
-};
-// case where component matches
-template<class Component, class... Rest>
-struct list_contains_component<component_list<Component, Rest...>, Component>
-    : std::true_type
-{
-};
-// non-matching (recursive) case
-template<class Component, class OtherComponent, class... Rest>
-struct list_contains_component<
-    component_list<OtherComponent, Rest...>,
-    Component> : list_contains_component<component_list<Rest...>, Component>
-{
-};
-
-// collection_contains_component<Collection,Component>::value yields a
-// compile-time boolean indicating whether or not :Collection contains
-// :Component.
-template<class Collection, class Component>
-struct collection_contains_component
-{
-};
-template<class Components, class Storage, class Component>
-struct collection_contains_component<
-    component_collection<Components, Storage>,
-    Component> : list_contains_component<Components, Component>
-{
-};
-
-// add_component_to_list<List,Component>::type yields the list that results
-// from adding :Component to the head of :List.
-// Note that this doesn't perform any checks for duplicate tags.
-template<class List, class Component>
-struct add_component_to_list
-{
-};
-template<class Component, class... Components>
-struct add_component_to_list<component_list<Components...>, Component>
-{
-    typedef component_list<Component, Components...> type;
-};
-
-// remove_component_from_list<List,Tag>::type yields the list that results from
-// removing the component matching :Tag from :List.
-// Note that removing a component that's not actually in the list is not
-// considered an error.
-template<class List, class Tag>
-struct remove_component_from_list
-{
-};
-// base case (list is empty)
-template<class Tag>
-struct remove_component_from_list<component_list<>, Tag>
-{
-    typedef component_list<> type;
-};
-// case where component matches
-template<class Tag, class Data, class... Rest>
-struct remove_component_from_list<
-    component_list<component<Tag, Data>, Rest...>,
-    Tag> : remove_component_from_list<component_list<Rest...>, Tag>
-{
-};
-// non-matching case
-template<class Tag, class OtherTag, class Data, class... Rest>
-struct remove_component_from_list<
-    component_list<component<OtherTag, Data>, Rest...>,
-    Tag>
-    : add_component_to_list<
-          typename remove_component_from_list<component_list<Rest...>, Tag>::
-              type,
-          component<OtherTag, Data>>
-{
-};
-
-// collection_contains_all_components<Collection,Components...>::value yields a
-// compile-time boolean indicating whether or not :Collection contains all
-// components in :Components.
-template<class Collection, class... Components>
-struct collection_contains_all_components
-{
-};
-// base case (list is empty)
-template<class Collection>
-struct collection_contains_all_components<Collection> : std::true_type
-{
-};
-// recursive case
-template<class Collection, class Component, class... Rest>
-struct collection_contains_all_components<Collection, Component, Rest...>
-    : std::conditional_t<
-          collection_contains_component<Collection, Component>::value,
-          collection_contains_all_components<Collection, Rest...>,
-          std::false_type>
-{
-};
-
-// merge_component_lists<A,B>::type yields a list of components that includes
-// all components from :A and :B (with no duplicates).
-template<class A, class B>
-struct merge_component_lists
-{
-};
-// base case (:A is empty)
-template<class B>
-struct merge_component_lists<component_list<>, B>
-{
-    typedef B type;
-};
-// recursive case
-template<class B, class AHead, class... ARest>
-struct merge_component_lists<component_list<AHead, ARest...>, B>
-    : add_component_to_list<
-          // Ensure that :AHead isn't duplicated. (This may be a noop.)
-          typename remove_component_from_list<
-              typename merge_component_lists<component_list<ARest...>, B>::type,
-              typename AHead::tag>::type,
-          AHead>
-{
-};
-
-// component_collection_is_convertible<From,To>::value yields a
-// compile-time boolean indicating whether or not the type :From can be
-// converted to the type :To (both must be component_collections).
-// The requirements for this are that a) the storage types are the same and b)
-// :From has a superset of the components of :To.
-template<class From, class To>
-struct component_collection_is_convertible
-{
-};
-// case where storage types differ
-template<
-    class FromComponents,
-    class FromStorage,
-    class ToComponents,
-    class ToStorage>
-struct component_collection_is_convertible<
-    component_collection<FromComponents, FromStorage>,
-    component_collection<ToComponents, ToStorage>> : std::false_type
-{
-};
-// case where storage types are the same, so components must be checked
-template<class Storage, class FromComponents, class... ToComponents>
-struct component_collection_is_convertible<
-    component_collection<FromComponents, Storage>,
-    component_collection<component_list<ToComponents...>, Storage>>
-    : collection_contains_all_components<
-          component_collection<FromComponents, Storage>,
-          ToComponents...>
-{
-};
-
-} // namespace detail
-
-template<class Components, class Storage>
-struct component_collection
-{
-    typedef Components components;
-    typedef Storage storage_type;
-
-    component_collection(Storage* storage) : storage(storage)
-    {
-    }
-
-    // copy constructor (from convertible collections)
-    template<class Other>
-    component_collection(
-        Other other,
-        std::enable_if_t<detail::component_collection_is_convertible<
-            Other,
-            component_collection>::value>* = 0)
-        : storage(other.storage)
-    {
-    }
-
-    // assignment operator (from convertible collections)
-    template<class Other>
-    std::enable_if_t<
-        detail::component_collection_is_convertible<
-            Other,
-            component_collection>::value,
-        component_collection&>
-    operator=(Other other)
-    {
-        storage = other.storage;
-        return *this;
-    }
-
-    Storage* storage;
-};
-
-// empty_component_collection<Storage> yields a component collection with
-// no components and :Storage as its storage type.
-template<class Storage>
-using empty_component_collection
-    = component_collection<detail::component_list<>, Storage>;
-
-// add_component_type<Collection,Tag,Data>::type gives the type that results
-// from extending :Collection with the component defined by :Tag and :Data.
-template<class Collection, class Tag, class Data>
-struct add_component_type
-{
-};
-template<class Tag, class Data, class Storage, class... Components>
-struct add_component_type<
-    component_collection<detail::component_list<Components...>, Storage>,
-    Tag,
-    Data>
-{
-    static_assert(
-        !detail::component_list_contains_tag<
-            detail::component_list<Components...>,
-            Tag>::value,
-        "duplicate component tag");
-    typedef component_collection<
-        detail::component_list<detail::component<Tag, Data>, Components...>,
-        Storage>
-        type;
-};
-template<class Collection, class Tag, class Data>
-using add_component_type_t =
-    typename add_component_type<Collection, Tag, Data>::type;
-
-// remove_component_type<Collection,Tag,Data>::type yields the type that results
-// from removing the component associated with :Tag from :Collection.
-template<class Collection, class Tag>
-struct remove_component_type
-{
-};
-template<class Tag, class Storage, class Components>
-struct remove_component_type<component_collection<Components, Storage>, Tag>
-{
-    static_assert(
-        detail::component_list_contains_tag<Components, Tag>::value,
-        "attempting to remove a component tag that doesn't exist");
-    typedef component_collection<
-        typename detail::remove_component_from_list<Components, Tag>::type,
-        Storage>
-        type;
-};
-template<class Collection, class Tag>
-using remove_component_type_t =
-    typename remove_component_type<Collection, Tag>::type;
-
-// merge_components<A,B>::type yields a component collection type that contains
-// all the components from :A and :B (but no duplicates).
-// Note that the resulting component collection inherits the storage type of :A.
-template<class A, class B>
-struct merge_components
-{
-    typedef component_collection<
-        typename detail::merge_component_lists<
-            typename A::components,
-            typename B::components>::type,
-        typename A::storage_type>
-        type;
-};
-template<class A, class B>
-using merge_components_t = typename merge_components<A, B>::type;
-
-#endif
-
-#ifdef ALIA_DYNAMIC_COMPONENT_CHECKING
-
-struct dynamic_component_list
-{
-};
-
-template<class Components, class Storage>
-struct component_collection
-{
-    typedef Components components;
-    typedef Storage storage_type;
-
-    component_collection(Storage* storage) : storage(storage)
-    {
-    }
-
-    Storage* storage;
-};
-
-// empty_component_collection<Storage> yields a component collection with
-// no components and :Storage as its storage type.
-template<class Storage>
-using empty_component_collection
-    = component_collection<dynamic_component_list, Storage>;
-
-// add_component_type<Collection,Tag,Data>::type gives the type that results
-// from extending :Collection with the component defined by :Tag and :Data.
-template<class Collection, class Tag, class Data>
-struct add_component_type
-{
-    typedef Collection type;
-};
-template<class Collection, class Tag, class Data>
-using add_component_type_t =
-    typename add_component_type<Collection, Tag, Data>::type;
-
-// remove_component_type<Collection,Tag,Data>::type yields the type that results
-// from removing the component associated with :Tag from :Collection.
-template<class Collection, class Tag>
-struct remove_component_type
-{
-    typedef Collection type;
-};
-template<class Collection, class Tag>
-using remove_component_type_t =
-    typename remove_component_type<Collection, Tag>::type;
-
-// merge_components<A,B>::type yields a component collection type that contains
-// all the components from :A and :B (but no duplicates).
-// Note that the resulting component collection inherits the storage type of :A.
-template<class A, class B>
-struct merge_components
-{
-    typedef A type;
-};
-template<class A, class B>
-using merge_components_t = typename merge_components<A, B>::type;
-
-#endif
-
-// Extend a collection by adding a new component.
-// :Tag is the tag of the component.
-// :data is the data associated with the new component.
-// :new_storage is a pointer to the storage object to use for the extended
-// collection. It must outlive the returned collection. (Its contents before
-// calling this function don't matter.)
-template<class Tag, class Data, class Collection>
-add_component_type_t<Collection, Tag, Data>
-add_component(
-    typename Collection::storage_type* new_storage,
-    Collection collection,
-    Data data)
-{
-    // Copy over existing components.
-    *new_storage = *collection.storage;
-    // Add the new data to the storage object.
-    add_component<Tag>(*new_storage, data);
-    // Create a collection to reference the new storage object.
-    return add_component_type_t<Collection, Tag, Data>(new_storage);
-}
-
-// Remove a component from a collection.
-// :Tag is the tag of the component.
-// :new_storage is a pointer to the storage object to use for the new
-// collection. It must outlive the returned collection. (Its contents before
-// calling this function don't matter.)
-// Note that this function is allowed to reuse the storage object from the
-// input collection, so that is also required to outlive the returned
-// collection.
-template<class Tag, class Collection>
-remove_component_type_t<Collection, Tag>
-remove_component(
-    typename Collection::storage_type* new_storage, Collection collection)
-{
-#ifdef ALIA_STATIC_COMPONENT_CHECKING
-    // Since we're using static checking, it doesn't matter if the runtime
-    // storage includes an extra component. Static checks will prevent its use.
-    return remove_component_type_t<Collection, Tag>(collection.storage);
-#else
-    // Copy over existing components.
-    *new_storage = *collection.storage;
-    // Remove the component from the storage object.
-    remove_component<Tag>(*new_storage);
-    // Create a collection to reference the new storage object.
-    return remove_component_type_t<Collection, Tag>(new_storage);
-#endif
-}
-
-// Determine if a component is in a collection.
-// :Tag identifies the component.
-template<class Tag, class Collection>
-bool
-has_component(Collection collection)
-{
-#ifdef ALIA_STATIC_COMPONENT_CHECKING
-    return detail::component_collection_contains_tag<Collection, Tag>::value;
-#else
-    return has_component<Tag>(*collection.storage);
-#endif
-}
-
-// Get a reference to the data associated with a component in a collection.
-// :Tag identifies the component.
-// If static checking is enabled, this generates a compile-time error if :Tag
-// isn't contained in :collection.
-template<class Tag, class Collection>
-auto
-get_component(Collection collection)
-{
-#ifdef ALIA_STATIC_COMPONENT_CHECKING
-    static_assert(
-        detail::component_collection_contains_tag<Collection, Tag>::value,
-        "component not found in collection");
-#endif
-    return get_component<Tag>(*collection.storage);
-}
-
-// generic_component_storage is one possible implementation of the underlying
-// container for storing components and their associated data.
-// :Data is the type used to store component data.
-template<class Data>
-struct generic_component_storage
-{
-    std::unordered_map<std::type_index, Data> components;
-};
-
-// The following functions constitute the interface expected of storage objects.
-
-// Does the storage object have a component with the given tag?
-template<class Tag, class Data>
-bool
-has_component(generic_component_storage<Data>& storage)
-{
-    return storage.components.find(std::type_index(typeid(Tag)))
-           != storage.components.end();
-}
-
-// Add a component.
-template<class Tag, class StorageData, class ComponentData>
-void
-add_component(
-    generic_component_storage<StorageData>& storage, ComponentData&& data)
-{
-    storage.components[std::type_index(typeid(Tag))]
-        = std::forward<ComponentData&&>(data);
-}
-
-// Remove a component.
-template<class Tag, class Data>
-void
-remove_component(generic_component_storage<Data>& storage)
-{
-    storage.components.erase(std::type_index(typeid(Tag)));
-}
-
-// Get the data for a component.
-template<class Tag, class Data>
-Data&
-get_component(generic_component_storage<Data>& storage)
-{
-    return storage.components.at(std::type_index(typeid(Tag)));
-}
-
-} // namespace alia
-
-
-
-namespace alia {
-
-struct data_traversal_tag
-{
-};
-struct data_traversal;
-
-struct event_traversal_tag
-{
-};
-struct event_traversal;
-
-struct any_pointer
-{
-    any_pointer()
-    {
-    }
-
-    template<class T>
-    any_pointer(T* ptr) : ptr(ptr)
-    {
-    }
-
-    template<class T>
-    operator T*()
-    {
-        return reinterpret_cast<T*>(ptr);
-    }
-
-    void* ptr;
-};
-
-template<class T>
-bool
-operator==(any_pointer p, T* other)
-{
-    return reinterpret_cast<T*>(p.ptr) == other;
-}
-template<class T>
-bool
-operator==(T* other, any_pointer p)
-{
-    return other == reinterpret_cast<T*>(p.ptr);
-}
-template<class T>
-bool
-operator!=(any_pointer p, T* other)
-{
-    return reinterpret_cast<T*>(p.ptr) != other;
-}
-template<class T>
-bool
-operator!=(T* other, any_pointer p)
-{
-    return other != reinterpret_cast<T*>(p.ptr);
-}
-
-// The structure we use to store components. It provides direct storage of the
-// commonly-used components in the core of alia.
-struct component_storage
-{
-    data_traversal* data = 0;
-    event_traversal* event = 0;
-    // generic storage for other components
-    generic_component_storage<any_pointer> other;
-};
-
-// All component access is done through the following 'manipulator' structure.
-// Specializations can be defined for tags that have direct storage.
-
-template<class Tag>
-struct component_manipulator
-{
-    static bool
-    has(component_storage& storage)
-    {
-        return has_component<Tag>(storage.other);
-    }
-    static void
-    add(component_storage& storage, any_pointer data)
-    {
-        add_component<Tag>(storage.other, data);
-    }
-    static void
-    remove(component_storage& storage)
-    {
-        remove_component<Tag>(storage.other);
-    }
-    static any_pointer
-    get(component_storage& storage)
-    {
-        return get_component<Tag>(storage.other);
-    }
-};
-
-template<>
-struct component_manipulator<data_traversal_tag>
-{
-    static bool
-    has(component_storage& storage)
-    {
-        return storage.data != 0;
-    }
-    static void
-    add(component_storage& storage, data_traversal* data)
-    {
-        storage.data = data;
-    }
-    static void
-    remove(component_storage& storage)
-    {
-        storage.data = 0;
-    }
-    static data_traversal*
-    get(component_storage& storage)
-    {
-#ifdef ALIA_DYNAMIC_COMPONENT_CHECKING
-        if (!storage.data)
-            throw "missing data traversal component";
-#endif
-        return storage.data;
-    }
-};
-
-template<>
-struct component_manipulator<event_traversal_tag>
-{
-    static bool
-    has(component_storage& storage)
-    {
-        return storage.event != 0;
-    }
-    static void
-    add(component_storage& storage, event_traversal* event)
-    {
-        storage.event = event;
-    }
-    static void
-    remove(component_storage& storage)
-    {
-        storage.event = 0;
-    }
-    static event_traversal*
-    get(component_storage& storage)
-    {
-#ifdef ALIA_DYNAMIC_COMPONENT_CHECKING
-        if (!storage.event)
-            throw "missing event traversal component";
-#endif
-        return storage.event;
-    }
-};
-
-// The following is the implementation of the interface expected of component
-// storage objects. It simply forwards the requests along to the appropriate
-// manipulator.
-
-template<class Tag>
-bool
-has_component(component_storage& storage)
-{
-    return component_manipulator<Tag>::has(storage);
-}
-
-template<class Tag, class Data>
-void
-add_component(component_storage& storage, Data&& data)
-{
-    component_manipulator<Tag>::add(storage, std::forward<Data&&>(data));
-}
-
-template<class Tag>
-void
-remove_component(component_storage& storage)
-{
-    component_manipulator<Tag>::remove(storage);
-}
-
-template<class Tag>
-auto
-get_component(component_storage& storage)
-{
-    return component_manipulator<Tag>::get(storage);
-}
-
-// Finally, the typedef for the context...
-
-typedef add_component_type_t<
-    empty_component_collection<component_storage>,
-    event_traversal_tag,
-    event_traversal*>
-    dataless_context;
-
-typedef add_component_type_t<
-    dataless_context,
-    data_traversal_tag,
-    data_traversal*>
-    context;
-
-// And some convenience functions...
-
-template<class Context>
-data_traversal&
-get_data_traversal(Context ctx)
-{
-    return *get_component<data_traversal_tag>(ctx);
-}
-
-bool
-is_refresh_pass(context ctx);
-
-template<class Context>
-event_traversal&
-get_event_traversal(Context ctx)
-{
-    return *get_component<event_traversal_tag>(ctx);
-}
-
-} // namespace alia
-
-
 #include <functional>
 #include <memory>
 #include <sstream>
@@ -1350,6 +538,792 @@ struct unit_id_type
 {
 };
 static simple_id<unit_id_type*> const unit_id(nullptr);
+
+} // namespace alia
+
+
+
+#include <type_traits>
+#include <typeindex>
+#include <unordered_map>
+
+
+
+#include <type_traits>
+
+// This file provides a means for defining arbitrary collections of components
+// that constitute the context in which an application operates. The set of
+// components required for an application obviously varies across applications
+// (and even across modules within a complex application). The goal here is to
+// allow applications to freely mix together components from multiple sources
+// (which may not know about one another).
+//
+// Some additional design considerations follow. Note that these refer to
+// contexts rather than component collections, since that is the primary
+// motivating example of a component collection.
+//
+// 1. An application should be able to easily define its own components and mix
+// those into its context. This includes application-level state. If there is
+// state that is essentially global to the application (e.g., the active user),
+// application code should be able to retrieve this from the application
+// context. Similarly, a component of the application should be able to extend
+// the application's context with state that is specific to that component
+// (but ubiquitous within it).
+//
+// 2. Functions that take contexts as arguments should be able to define the set
+// of components that they require as part of the type signature of the context.
+// Any caller whose context includes a superset of those components should be
+// able to call the function with an implicit conversion of the context
+// parameter. This should all be possible without needing to define functions as
+// templates (otherwise alia-based applications would end up being entirely
+// header-based) and with minimal (ideally zero) runtime overhead in converting
+// the caller's context to the type expected by the function.
+//
+// 3. Retrieving frames/capabilities from a context should require minimal
+// (ideally zero) runtime overhead.
+//
+// 4. Static type checking of context conversions/retrievals should be
+// possible but optional. Developers should not have to pay these compile-time
+// costs unless it's desired. It should be possible to use a mixed workflow
+// where these checks are replaced by runtime checks for iterative development
+// but enabled for CI/release builds.
+//
+// In order to satisfy #4, this file looks for a #define called
+// ALIA_DYNAMIC_COMPONENT_CHECKING. If this is set, code related to statically
+// checking components is omitted and dynamic checks are substituted where
+// appropriate. Note that when ALIA_DYNAMIC_COMPONENT_CHECKING is NOT set,
+// ALIA_STATIC_COMPONENT_CHECKING is set and static checks are included.
+//
+// The statically typed component_collection object is a simple wrapper around
+// the dynamically typed storage object. It adds a compile-time type list
+// indicating what's actually supposed to be in the collection. This allows
+// collections to be converted to other collection types without any run-time
+// overhead. This does imply some run-time overhead for retrieving components
+// from the collection, but that can be mitigated by providing zero-cost
+// retrieval for select (core) components. This also implies that the collection
+// object must be passed by value (or const& - though there's no real point in
+// that) whereas passing by reference would be more obvious, but that seems
+// unavoidable given the requirements.
+
+#ifndef ALIA_DYNAMIC_COMPONENT_CHECKING
+#define ALIA_STATIC_COMPONENT_CHECKING
+#endif
+
+namespace alia {
+
+#define ALIA_DEFINE_COMPONENT_TYPE(tag, data)                                  \
+    struct tag                                                                 \
+    {                                                                          \
+        typedef data data_type;                                                \
+    };
+
+template<class Tags, class Storage>
+struct component_collection;
+
+#ifdef ALIA_STATIC_COMPONENT_CHECKING
+
+namespace detail {
+
+// tag_list<Tags...> defines a simple compile-time list of tags. This is held by
+// a component_collection to provide compile-time tracking of its contents.
+template<class... Tags>
+struct tag_list
+{
+};
+
+// list_contains_tag<List,Tag>::value yields a compile-time boolean indicating
+// whether or not the tag_list :List contains :Tag.
+template<class List, class Tag>
+struct list_contains_tag
+{
+};
+// base case - The list is empty, so the tag isn't in there.
+template<class Tag>
+struct list_contains_tag<tag_list<>, Tag> : std::false_type
+{
+};
+// case where tag matches
+template<class Tag, class... Rest>
+struct list_contains_tag<tag_list<Tag, Rest...>, Tag> : std::true_type
+{
+};
+// non-matching (recursive) case
+template<class Tag, class OtherTag, class... Rest>
+struct list_contains_tag<tag_list<OtherTag, Rest...>, Tag>
+    : list_contains_tag<tag_list<Rest...>, Tag>
+{
+};
+
+// component_collection_contains_tag<Collection,Tag>::value yields a
+// compile-time boolean indicating whether or not :Collection contains a
+// component with the tag :Tag.
+template<class Collection, class Tag>
+struct component_collection_contains_tag
+{
+};
+template<class Tags, class Storage, class Tag>
+struct component_collection_contains_tag<
+    component_collection<Tags, Storage>,
+    Tag> : list_contains_tag<Tags, Tag>
+{
+};
+
+// add_tag_to_list<List,Tag>::type yields the list that results from adding :Tag
+// to the head of :List.
+//
+// Note that this doesn't perform any checks for duplicates.
+//
+template<class List, class Tag>
+struct add_tag_to_list
+{
+};
+template<class Tag, class... Tags>
+struct add_tag_to_list<tag_list<Tags...>, Tag>
+{
+    typedef tag_list<Tag, Tags...> type;
+};
+
+// remove_tag_from_list<List,Tag>::type yields the list that results from
+// removing the tag matching :Tag from :List.
+//
+// Note that removing a tag that's not actually in the list is not considered an
+// error.
+//
+template<class List, class Tag>
+struct remove_tag_from_list
+{
+};
+// base case (list is empty)
+template<class Tag>
+struct remove_tag_from_list<tag_list<>, Tag>
+{
+    typedef tag_list<> type;
+};
+// case where component matches
+template<class Tag, class... Rest>
+struct remove_tag_from_list<tag_list<Tag, Rest...>, Tag>
+    : remove_tag_from_list<tag_list<Rest...>, Tag>
+{
+};
+// non-matching case
+template<class Tag, class OtherTag, class... Rest>
+struct remove_tag_from_list<tag_list<OtherTag, Rest...>, Tag>
+    : add_tag_to_list<
+          typename remove_tag_from_list<tag_list<Rest...>, Tag>::type,
+          OtherTag>
+{
+};
+
+// collection_contains_all_tags<Collection,Tags...>::value yields a compile-time
+// boolean indicating whether or not :Collection contains all tags in :Tags.
+template<class Collection, class... Tags>
+struct collection_contains_all_tags
+{
+};
+// base case - The list of tags to search for is empty, so this is trivially
+// true.
+template<class Collection>
+struct collection_contains_all_tags<Collection> : std::true_type
+{
+};
+// recursive case
+template<class Collection, class Tag, class... Rest>
+struct collection_contains_all_tags<Collection, Tag, Rest...>
+    : std::conditional_t<
+          component_collection_contains_tag<Collection, Tag>::value,
+          collection_contains_all_tags<Collection, Rest...>,
+          std::false_type>
+{
+};
+
+// merge_tag_lists<A,B>::type yields a list of tags that includes all tags from
+// :A and :B (with no duplicates).
+template<class A, class B>
+struct merge_tag_lists
+{
+};
+// base case (:A is empty)
+template<class B>
+struct merge_tag_lists<tag_list<>, B>
+{
+    typedef B type;
+};
+// recursive case
+template<class B, class AHead, class... ARest>
+struct merge_tag_lists<tag_list<AHead, ARest...>, B>
+    : add_tag_to_list<
+          // Ensure that :AHead isn't duplicated. (This may be a noop.)
+          typename remove_tag_from_list<
+              typename merge_tag_lists<tag_list<ARest...>, B>::type,
+              AHead>::type,
+          AHead>
+{
+};
+
+// component_collection_is_convertible<From,To>::value yields a
+// compile-time boolean indicating whether or not the type :From can be
+// converted to the type :To (both must be component_collections).
+// The requirements for this are that a) the storage types are the same and b)
+// the component tags of :From are a superset of those of :To.
+template<class From, class To>
+struct component_collection_is_convertible
+{
+};
+// case where storage types differ
+template<class FromTags, class FromStorage, class ToTags, class ToStorage>
+struct component_collection_is_convertible<
+    component_collection<FromTags, FromStorage>,
+    component_collection<ToTags, ToStorage>> : std::false_type
+{
+};
+// case where storage types are the same, so components must be checked
+template<class Storage, class FromTags, class... ToTags>
+struct component_collection_is_convertible<
+    component_collection<FromTags, Storage>,
+    component_collection<tag_list<ToTags...>, Storage>>
+    : collection_contains_all_tags<
+          component_collection<FromTags, Storage>,
+          ToTags...>
+{
+};
+
+} // namespace detail
+
+template<class Tags, class Storage>
+struct component_collection
+{
+    typedef Tags tags;
+    typedef Storage storage_type;
+
+    component_collection(Storage* storage) : storage(storage)
+    {
+    }
+
+    // copy constructor (from convertible collections)
+    template<class Other>
+    component_collection(
+        Other other,
+        std::enable_if_t<detail::component_collection_is_convertible<
+            Other,
+            component_collection>::value>* = 0)
+        : storage(other.storage)
+    {
+    }
+
+    // assignment operator (from convertible collections)
+    template<class Other>
+    std::enable_if_t<
+        detail::component_collection_is_convertible<
+            Other,
+            component_collection>::value,
+        component_collection&>
+    operator=(Other other)
+    {
+        storage = other.storage;
+        return *this;
+    }
+
+    Storage* storage;
+};
+
+// empty_component_collection<Storage> yields a component collection with
+// no components and :Storage as its storage type.
+template<class Storage>
+using empty_component_collection
+    = component_collection<detail::tag_list<>, Storage>;
+
+// add_component_type<Collection,Tag>::type gives the type that results
+// from extending :Collection with the component defined by :Tag.
+template<class Collection, class Tag>
+struct add_component_type
+{
+};
+template<class Tag, class Storage, class... Tags>
+struct add_component_type<
+    component_collection<detail::tag_list<Tags...>, Storage>,
+    Tag>
+{
+    static_assert(
+        !detail::list_contains_tag<detail::tag_list<Tags...>, Tag>::value,
+        "duplicate component tag");
+    typedef component_collection<detail::tag_list<Tag, Tags...>, Storage> type;
+};
+template<class Collection, class Tag>
+using add_component_type_t = typename add_component_type<Collection, Tag>::type;
+
+// remove_component_type<Collection,Tag>::type yields the type that results
+// from removing the component associated with :Tag from :Collection.
+template<class Collection, class Tag>
+struct remove_component_type
+{
+};
+template<class Tag, class Storage, class Tags>
+struct remove_component_type<component_collection<Tags, Storage>, Tag>
+{
+    static_assert(
+        detail::list_contains_tag<Tags, Tag>::value,
+        "attempting to remove a component tag that doesn't exist");
+    typedef component_collection<
+        typename detail::remove_tag_from_list<Tags, Tag>::type,
+        Storage>
+        type;
+};
+template<class Collection, class Tag>
+using remove_component_type_t =
+    typename remove_component_type<Collection, Tag>::type;
+
+// merge_components<A,B>::type yields a component collection type that contains
+// all the components from :A and :B (but no duplicates).
+// Note that the resulting component collection inherits the storage type of :A.
+template<class A, class B>
+struct merge_components
+{
+    typedef component_collection<
+        typename detail::merge_tag_lists<typename A::tags, typename B::tags>::
+            type,
+        typename A::storage_type>
+        type;
+};
+template<class A, class B>
+using merge_components_t = typename merge_components<A, B>::type;
+
+#else
+
+struct dynamic_tag_list
+{
+};
+
+template<class Tags, class Storage>
+struct component_collection
+{
+    typedef Tags tags;
+    typedef Storage storage_type;
+
+    component_collection(Storage* storage) : storage(storage)
+    {
+    }
+
+    Storage* storage;
+};
+
+// empty_component_collection<Storage> yields a component collection with no
+// components and :Storage as its storage type.
+template<class Storage>
+using empty_component_collection
+    = component_collection<dynamic_tag_list, Storage>;
+
+// add_component_type<Collection,Tag>::type gives the type that results from
+// extending :Collection with the component defined by :Tag and :Data.
+template<class Collection, class Tag>
+struct add_component_type
+{
+    typedef Collection type;
+};
+template<class Collection, class Tag>
+using add_component_type_t = typename add_component_type<Collection, Tag>::type;
+
+// remove_component_type<Collection,Tag>::type yields the type that results from
+// removing the component associated with :Tag from :Collection.
+template<class Collection, class Tag>
+struct remove_component_type
+{
+    typedef Collection type;
+};
+template<class Collection, class Tag>
+using remove_component_type_t =
+    typename remove_component_type<Collection, Tag>::type;
+
+// merge_components<A,B>::type yields a component collection type that contains
+// all the components from :A and :B (but no duplicates).
+// Note that the resulting component collection inherits the storage type of :A.
+template<class A, class B>
+struct merge_components
+{
+    typedef A type;
+};
+template<class A, class B>
+using merge_components_t = typename merge_components<A, B>::type;
+
+#endif
+
+// Make an empty component collection for the given storage object.
+template<class Storage>
+empty_component_collection<Storage>
+make_empty_component_collection(Storage* storage)
+{
+    return empty_component_collection<Storage>(storage);
+}
+
+// Extend a collection by adding a new component.
+// :Tag is the tag of the component.
+// :data is the data associated with the new component.
+//
+// Note that although this returns a new collection (with the correct type), the
+// new collection shares the storage of the original, so this should be used
+// with caution.
+//
+template<class Tag, class Collection>
+add_component_type_t<Collection, Tag>
+add_component(Collection collection, typename Tag::data_type data)
+{
+    auto* storage = collection.storage;
+    // Add the new data to the storage object.
+    storage->template add<Tag>(data);
+    // Create a collection with the proper type to reference the storage.
+    return add_component_type_t<Collection, Tag>(storage);
+}
+
+// Remove a component from a collection.
+// :Tag is the tag of the component.
+//
+// As with add_component(), although this returns a new collection for typing
+// purposes, the new collection shares the storage of the original, so use with
+// caution.
+//
+template<class Tag, class Collection>
+remove_component_type_t<Collection, Tag>
+remove_component(Collection collection)
+{
+    typename Collection::storage_type* storage = collection.storage;
+    // We only actually have to remove the component if we're using dynamic
+    // component checking. With static checking, it doesn't matter if the
+    // runtime storage includes an extra component. Static checks will prevent
+    // its use.
+#ifdef ALIA_DYNAMIC_COMPONENT_CHECKING
+    // Remove the component from the storage object.
+    storage->template remove<Tag>();
+#endif
+    return remove_component_type_t<Collection, Tag>(storage);
+}
+
+// Remove a component from a collection.
+//
+// With this version, you supply a new storage object, and the function uses it
+// if needed to ensure that the original collection's storage is left untouched.
+//
+template<class Tag, class Collection, class Storage>
+remove_component_type_t<Collection, Tag>
+remove_component(Collection collection, Storage* new_storage)
+{
+#ifdef ALIA_STATIC_COMPONENT_CHECKING
+    return remove_component_type_t<Collection, Tag>(collection.storage);
+#else
+    *new_storage = *collection.storage;
+    new_storage->template remove<Tag>();
+    return remove_component_type_t<Collection, Tag>(new_storage);
+#endif
+}
+
+// Determine if a component is in a collection.
+// :Tag identifies the component.
+template<class Tag, class Collection>
+bool
+has_component(Collection collection)
+{
+#ifdef ALIA_STATIC_COMPONENT_CHECKING
+    return detail::component_collection_contains_tag<Collection, Tag>::value;
+#else
+    return collection.storage->template has<Tag>();
+#endif
+}
+
+#ifdef ALIA_DYNAMIC_COMPONENT_CHECKING
+
+// When using dynamic component checking, this error is thrown when trying to
+// retrieve a component that's not actually present in a collection.
+template<class Tag>
+struct component_not_found : exception
+{
+    component_not_found()
+        : exception(
+              std::string("component not found in collection:\n")
+              + typeid(Tag).name())
+    {
+    }
+};
+
+#endif
+
+// component_caster should be specialized so that it properly casts from stored
+// component values to the expected types.
+
+template<class Stored, class Expected>
+struct component_caster
+{
+};
+
+// If we're stored what's expected, then the cast is trivial.
+template<class T>
+struct component_caster<T, T>
+{
+    static T
+    apply(T stored)
+    {
+        return stored;
+    }
+};
+template<class T>
+struct component_caster<T&, T>
+{
+    static T&
+    apply(T& stored)
+    {
+        return stored;
+    }
+};
+
+// Get a reference to the data associated with a component in a
+// collection. :Tag identifies the component. If static checking is
+// enabled, this generates a compile-time error if :Tag isn't contained
+// in :collection.
+template<class Tag, class Collection>
+auto
+get_component(Collection collection)
+{
+#ifdef ALIA_STATIC_COMPONENT_CHECKING
+    static_assert(
+        detail::component_collection_contains_tag<Collection, Tag>::value,
+        "component not found in collection");
+#else
+    if (!has_component<Tag>(collection))
+        throw component_not_found<Tag>();
+#endif
+    return component_caster<
+        decltype(collection.storage->template get<Tag>()),
+        typename Tag::data_type>::apply(collection.storage
+                                            ->template get<Tag>());
+}
+
+} // namespace alia
+
+
+namespace alia {
+
+// generic_component_storage is one possible implementation of the underlying
+// container for storing components and their associated data.
+// :Data is the type used to store component data.
+template<class Data>
+struct generic_component_storage
+{
+    std::unordered_map<std::type_index, Data> components;
+
+    template<class Tag>
+    bool
+    has() const
+    {
+        return this->components.find(std::type_index(typeid(Tag)))
+               != this->components.end();
+    }
+
+    template<class Tag, class ComponentData>
+    void
+    add(ComponentData&& data)
+    {
+        this->components[std::type_index(typeid(Tag))]
+            = std::forward<ComponentData&&>(data);
+    }
+
+    template<class Tag>
+    void
+    remove()
+    {
+        this->components.erase(std::type_index(typeid(Tag)));
+    }
+
+    template<class Tag>
+    Data&
+    get()
+    {
+        return this->components.at(std::type_index(typeid(Tag)));
+    }
+};
+
+// any_pointer is a simple way to store pointers to any type in a
+// generic_component_storage object.
+struct any_pointer
+{
+    any_pointer()
+    {
+    }
+
+    template<class T>
+    any_pointer(T* ptr) : ptr(ptr)
+    {
+    }
+
+    void* ptr;
+};
+
+template<class Pointer>
+struct component_caster<any_pointer&, Pointer*>
+{
+    static Pointer*
+    apply(any_pointer stored)
+    {
+        return reinterpret_cast<Pointer*>(stored.ptr);
+    }
+};
+template<class Pointer>
+struct component_caster<any_pointer, Pointer*>
+{
+    static Pointer*
+    apply(any_pointer stored)
+    {
+        return reinterpret_cast<Pointer*>(stored.ptr);
+    }
+};
+
+// The following provides a small framework for defining more specialized
+// component storage structures with direct storage of frequently used
+// components. See context.hpp for an example of how it's used.
+
+template<class Storage, class Tag>
+struct component_accessor
+{
+    static bool
+    has(Storage const& storage)
+    {
+        return storage.generic.template has<Tag>();
+    }
+    static void
+    add(Storage& storage, any_pointer data)
+    {
+        storage.generic.template add<Tag>(data);
+    }
+    static void
+    remove(Storage& storage)
+    {
+        storage.generic.template remove<Tag>();
+    }
+    static any_pointer
+    get(Storage& storage)
+    {
+        return storage.generic.template get<Tag>();
+    }
+};
+
+#define ALIA_IMPLEMENT_STORAGE_COMPONENT_ACCESSORS(Storage)                    \
+    template<class Tag>                                                        \
+    bool has() const                                                           \
+    {                                                                          \
+        return component_accessor<Storage, Tag>::has(*this);                   \
+    }                                                                          \
+                                                                               \
+    template<class Tag, class Data>                                            \
+    void add(Data&& data)                                                      \
+    {                                                                          \
+        component_accessor<Storage, Tag>::add(                                 \
+            *this, std::forward<Data&&>(data));                                \
+    }                                                                          \
+                                                                               \
+    template<class Tag>                                                        \
+    void remove()                                                              \
+    {                                                                          \
+        component_accessor<Storage, Tag>::remove(*this);                       \
+    }                                                                          \
+                                                                               \
+    template<class Tag>                                                        \
+    decltype(auto) get()                                                       \
+    {                                                                          \
+        return component_accessor<Storage, Tag>::get(*this);                   \
+    }
+
+#define ALIA_ADD_DIRECT_COMPONENT_ACCESS(Storage, Tag, name)                   \
+    template<>                                                                 \
+    struct component_accessor<Storage, Tag>                                    \
+    {                                                                          \
+        static bool                                                            \
+        has(Storage const& storage)                                            \
+        {                                                                      \
+            return storage.name != nullptr;                                    \
+        }                                                                      \
+        static void                                                            \
+        add(Storage& storage, Tag::data_type data)                             \
+        {                                                                      \
+            storage.name = data;                                               \
+        }                                                                      \
+        static void                                                            \
+        remove(Storage& storage)                                               \
+        {                                                                      \
+            storage.name = nullptr;                                            \
+        }                                                                      \
+        static Tag::data_type                                                  \
+        get(Storage& storage)                                                  \
+        {                                                                      \
+            return storage.name;                                               \
+        }                                                                      \
+    };
+
+} // namespace alia
+
+
+namespace alia {
+
+struct data_traversal;
+ALIA_DEFINE_COMPONENT_TYPE(data_traversal_tag, data_traversal*)
+
+struct event_traversal;
+ALIA_DEFINE_COMPONENT_TYPE(event_traversal_tag, event_traversal*)
+
+struct system;
+ALIA_DEFINE_COMPONENT_TYPE(system_tag, system*)
+
+// the structure we use to store components - It provides direct storage of the
+// commonly-used components in the core of alia.
+
+struct context_component_storage
+{
+    // directly-stored components
+    system* sys = nullptr;
+    event_traversal* event = nullptr;
+    data_traversal* data = nullptr;
+
+    // generic storage for other components
+    generic_component_storage<any_pointer> generic;
+
+    ALIA_IMPLEMENT_STORAGE_COMPONENT_ACCESSORS(context_component_storage)
+};
+
+ALIA_ADD_DIRECT_COMPONENT_ACCESS(context_component_storage, system_tag, sys)
+ALIA_ADD_DIRECT_COMPONENT_ACCESS(
+    context_component_storage, event_traversal_tag, event)
+ALIA_ADD_DIRECT_COMPONENT_ACCESS(
+    context_component_storage, data_traversal_tag, data)
+
+// the typedefs for the context - There are two because we want to be able to
+// represent the context with and without data capabilities.
+
+typedef add_component_type_t<
+    add_component_type_t<
+        empty_component_collection<context_component_storage>,
+        system_tag>,
+    event_traversal_tag>
+    dataless_context;
+
+typedef add_component_type_t<dataless_context, data_traversal_tag> context;
+
+// And some convenience functions...
+
+context
+make_context(
+    context_component_storage* storage,
+    system* sys,
+    event_traversal* event,
+    data_traversal* data);
+
+template<class Context>
+event_traversal&
+get_event_traversal(Context ctx)
+{
+    return *get_component<event_traversal_tag>(ctx);
+}
+
+template<class Context>
+data_traversal&
+get_data_traversal(Context ctx)
+{
+    return *get_component<data_traversal_tag>(ctx);
+}
 
 } // namespace alia
 
@@ -2722,6 +2696,529 @@ direct(Value const& x)
 
 
 
+
+
+namespace alia {
+
+// The following are utilities that are used to implement the control flow
+// macros. They shouldn't be used directly by applications.
+
+struct if_block : noncopyable
+{
+    if_block(data_traversal& traversal, bool condition);
+
+ private:
+    scoped_data_block scoped_data_block_;
+};
+
+struct switch_block : noncopyable
+{
+    template<class Context>
+    switch_block(Context& ctx)
+    {
+        nc_.begin(ctx);
+    }
+    template<class Id>
+    void
+    activate_case(Id id)
+    {
+        active_case_.end();
+        active_case_.begin(nc_, make_id(id), manual_delete(true));
+    }
+
+ private:
+    naming_context nc_;
+    named_block active_case_;
+};
+
+struct loop_block : noncopyable
+{
+    loop_block(data_traversal& traversal);
+    ~loop_block();
+    data_block&
+    block() const
+    {
+        return *block_;
+    }
+    data_traversal&
+    traversal() const
+    {
+        return *traversal_;
+    }
+    void
+    next();
+
+ private:
+    data_traversal* traversal_;
+    data_block* block_;
+};
+
+// The following are macros used to annotate control flow.
+// They are used exactly like their C equivalents, but all require an alia_end
+// after the end of their scope.
+// Also note that all come in two forms. One form ends in an underscore and
+// takes the context as its first argument. The other form has no trailing
+// underscore and assumes that the context is a variable named 'ctx'.
+
+// condition_is_true(x), where x is a signal whose value is testable in a
+// boolean context, returns true iff x is readable and its value is true.
+template<class Signal>
+std::enable_if_t<is_readable_signal_type<Signal>::value, bool>
+condition_is_true(Signal const& x)
+{
+    return signal_is_readable(x) && (read_signal(x) ? true : false);
+}
+
+// condition_is_false(x), where x is a signal whose value is testable in a
+// boolean context, returns true iff x is readable and its value is false.
+template<class Signal>
+std::enable_if_t<is_readable_signal_type<Signal>::value, bool>
+condition_is_false(Signal const& x)
+{
+    return signal_is_readable(x) && (read_signal(x) ? false : true);
+}
+
+// condition_is_readable(x), where x is a readable signal type, calls
+// signal_is_readable.
+template<class Signal>
+std::enable_if_t<is_readable_signal_type<Signal>::value, bool>
+condition_is_readable(Signal const& x)
+{
+    return signal_is_readable(x);
+}
+
+// read_condition(x), where x is a readable signal type, calls read_signal.
+template<class Signal>
+std::enable_if_t<
+    is_readable_signal_type<Signal>::value,
+    typename Signal::value_type>
+read_condition(Signal const& x)
+{
+    return read_signal(x);
+}
+
+// ALIA_STRICT_CONDITIONALS disables the definitions that allow non-signals to
+// be used in if/else/switch macros.
+#ifndef ALIA_STRICT_CONDITIONALS
+
+// condition_is_true(x) evaluates x in a boolean context.
+template<class T>
+std::enable_if_t<!is_signal_type<T>::value, bool>
+condition_is_true(T x)
+{
+    return x ? true : false;
+}
+
+// condition_is_false(x) evaluates x in a boolean context and inverts it.
+template<class T>
+std::enable_if_t<!is_signal_type<T>::value, bool>
+condition_is_false(T x)
+{
+    return x ? false : true;
+}
+
+// condition_is_readable(x), where x is NOT a signal type, always returns true.
+template<class T>
+std::enable_if_t<!is_signal_type<T>::value, bool>
+condition_is_readable(T const& x)
+{
+    return true;
+}
+
+// read_condition(x), where x is NOT a signal type, simply returns x.
+template<class T>
+std::enable_if_t<!is_signal_type<T>::value, T const&>
+read_condition(T const& x)
+{
+    return x;
+}
+
+#endif
+
+// if, else_if, else
+
+#define ALIA_IF_(ctx, condition)                                               \
+    {                                                                          \
+        bool _alia_else_condition ALIA_UNUSED;                                 \
+        {                                                                      \
+            auto const& _alia_condition = (condition);                         \
+            bool _alia_if_condition                                            \
+                = ::alia::condition_is_true(_alia_condition);                  \
+            _alia_else_condition                                               \
+                = ::alia::condition_is_false(_alia_condition);                 \
+            ::alia::if_block _alia_if_block(                                   \
+                get_data_traversal(ctx), _alia_if_condition);                  \
+            if (_alia_if_condition)                                            \
+            {
+
+#define ALIA_IF(condition) ALIA_IF_(ctx, condition)
+
+#define ALIA_ELSE_IF_(ctx, condition)                                          \
+    }                                                                          \
+    }                                                                          \
+    {                                                                          \
+        auto const& _alia_condition = (condition);                             \
+        bool _alia_else_if_condition                                           \
+            = _alia_else_condition                                             \
+              && ::alia::condition_is_true(_alia_condition);                   \
+        _alia_else_condition = _alia_else_condition                            \
+                               && ::alia::condition_is_false(_alia_condition); \
+        ::alia::if_block _alia_if_block(                                       \
+            get_data_traversal(ctx), _alia_else_if_condition);                 \
+        if (_alia_else_if_condition)                                           \
+        {
+
+#define ALIA_ELSE_IF(condition) ALIA_ELSE_IF_(ctx, condition)
+
+#define ALIA_ELSE_(ctx)                                                        \
+    }                                                                          \
+    }                                                                          \
+    {                                                                          \
+        ::alia::if_block _alia_if_block(                                       \
+            get_data_traversal(ctx), _alia_else_condition);                    \
+        if (_alia_else_condition)                                              \
+        {
+
+#define ALIA_ELSE ALIA_ELSE_(ctx)
+
+#ifdef ALIA_LOWERCASE_MACROS
+#define alia_if_(ctx, condition) ALIA_IF_(ctx, condition)
+#define alia_if(condition) ALIA_IF(condition)
+#define alia_else_if_(ctx, condition) ALIA_ELSE_IF_(ctx, condition)
+#define alia_else_if(condition) ALIA_ELSE_IF(condition)
+#define alia_else_(ctx) ALIA_ELSE(ctx)
+#define alia_else ALIA_ELSE
+#endif
+
+// switch
+
+#define ALIA_SWITCH_(ctx, x)                                                   \
+    {                                                                          \
+        ::alia::switch_block _alia_switch_block(ctx);                          \
+        if (::alia::condition_is_readable(x))                                  \
+        {                                                                      \
+            switch (::alia::read_condition(x))                                 \
+            {
+
+#define ALIA_SWITCH(x) ALIA_SWITCH_(ctx, x)
+
+#define ALIA_CONCATENATE_HELPER(a, b) a##b
+#define ALIA_CONCATENATE(a, b) ALIA_CONCATENATE_HELPER(a, b)
+
+#define ALIA_CASE_(ctx, c)                                                     \
+    case c:                                                                    \
+        _alia_switch_block.activate_case(c);                                   \
+        goto ALIA_CONCATENATE(_alia_dummy_label_, __LINE__);                   \
+        ALIA_CONCATENATE(_alia_dummy_label_, __LINE__)
+
+#define ALIA_CASE(c) ALIA_CASE_(ctx, c)
+
+#define ALIA_DEFAULT_(ctx)                                                     \
+    default:                                                                   \
+        _alia_switch_block.activate_case("_alia_default_case");                \
+        goto ALIA_CONCATENATE(_alia_dummy_label_, __LINE__);                   \
+        ALIA_CONCATENATE(_alia_dummy_label_, __LINE__)
+
+#define ALIA_DEFAULT ALIA_DEFAULT_(ctx)
+
+#ifdef ALIA_LOWERCASE_MACROS
+#define alia_switch_(ctx, x) ALIA_SWITCH_(ctx, x)
+#define alia_switch(x) ALIA_SWITCH(x)
+#define alia_case_(ctx, c) ALIA_CASE(ctx, c)
+#define alia_case(c) ALIA_CASE(c)
+#define alia_default_(ctx) ALIA_DEFAULT_(ctx)
+#define alia_default ALIA_DEFAULT
+#endif
+
+// for
+
+#define ALIA_FOR_(ctx, x)                                                      \
+    {                                                                          \
+        {                                                                      \
+            ::alia::loop_block _alia_looper(get_data_traversal(ctx));          \
+            for (x)                                                            \
+            {                                                                  \
+                ::alia::scoped_data_block _alia_scope;                         \
+                _alia_scope.begin(                                             \
+                    _alia_looper.traversal(), _alia_looper.block());           \
+                _alia_looper.next();
+
+#define ALIA_FOR(x) ALIA_FOR_(ctx, x)
+
+#ifdef ALIA_LOWERCASE_MACROS
+#define alia_for_(ctx, x) ALIA_FOR_(ctx, x)
+#define alia_for(x) ALIA_FOR(x)
+#endif
+
+// while
+
+#define ALIA_WHILE_(ctx, x)                                                    \
+    {                                                                          \
+        {                                                                      \
+            ::alia::loop_block _alia_looper(get_data_traversal(ctx));          \
+            while (x)                                                          \
+            {                                                                  \
+                ::alia::scoped_data_block _alia_scope;                         \
+                _alia_scope.begin(                                             \
+                    _alia_looper.traversal(), _alia_looper.block());           \
+                _alia_looper.next();
+
+#define ALIA_WHILE(x) ALIA_WHILE_(ctx, x)
+
+#ifdef ALIA_LOWERCASE_MACROS
+#define alia_while_(ctx, x) ALIA_WHILE_(ctx, x)
+#define alia_while(x) ALIA_WHILE(x)
+#endif
+
+// end
+
+#define ALIA_END                                                               \
+    }                                                                          \
+    }                                                                          \
+    }
+
+#ifdef ALIA_LOWERCASE_MACROS
+#define alia_end ALIA_END
+#endif
+
+// The following macros are substitutes for normal C++ control flow statements.
+// Unlike alia_if and company, they do NOT track control flow. Instead, they
+// convert your context variable to a dataless_context within the block.
+// This means that any attempt to retrieve data within the block will result
+// in an error (as it should).
+
+#define ALIA_REMOVE_DATA_TRACKING(ctx)                                         \
+    typename decltype(ctx)::storage_type _alia_storage;                        \
+    auto _alia_ctx                                                             \
+        = alia::remove_component<data_traversal_tag>(ctx, &_alia_storage);     \
+    auto ctx = _alia_ctx;
+
+#define ALIA_UNTRACKED_IF_(ctx, condition)                                     \
+    if (alia::condition_is_true(condition))                                    \
+    {                                                                          \
+        ALIA_REMOVE_DATA_TRACKING(ctx)                                         \
+        {                                                                      \
+            {
+
+#define ALIA_UNTRACKED_IF(condition) ALIA_UNTRACKED_IF_(ctx, condition)
+
+#define ALIA_UNTRACKED_ELSE_IF_(ctx, condition)                                \
+    }                                                                          \
+    }                                                                          \
+    }                                                                          \
+    else if (alia::condition_is_true(condition))                               \
+    {                                                                          \
+        ALIA_REMOVE_DATA_TRACKING(ctx)                                         \
+        {                                                                      \
+            {
+
+#define ALIA_UNTRACKED_ELSE_IF(condition)                                      \
+    ALIA_UNTRACKED_ELSE_IF_(ctx, condition)
+
+#define ALIA_UNTRACKED_ELSE_(ctx)                                              \
+    }                                                                          \
+    }                                                                          \
+    }                                                                          \
+    else                                                                       \
+    {                                                                          \
+        ALIA_REMOVE_DATA_TRACKING(ctx)                                         \
+        {                                                                      \
+            {
+
+#define ALIA_UNTRACKED_ELSE ALIA_UNTRACKED_ELSE_(ctx)
+
+#ifdef ALIA_LOWERCASE_MACROS
+
+#define alia_untracked_if_(ctx, condition) ALIA_UNTRACKED_IF_(ctx, condition)
+#define alia_untracked_if(condition) ALIA_UNTRACKED_IF(condition)
+#define alia_untracked_else_if_(ctx, condition)                                \
+    ALIA_UNTRACKED_ELSE_IF_(ctx, condition)
+#define alia_untracked_else_if(condition) ALIA_UNTRACKED_ELSE_IF(condition)
+#define alia_untracked_else_(ctx) ALIA_UNTRACKED_ELSE(ctx)
+#define alia_untracked_else ALIA_UNTRACKED_ELSE
+
+#endif
+
+#define ALIA_UNTRACKED_SWITCH_(ctx, expression)                                \
+    {                                                                          \
+        {                                                                      \
+            auto _alia_value = (expression);                                   \
+            ALIA_REMOVE_DATA_TRACKING(ctx)                                     \
+            switch (_alia_value)                                               \
+            {
+
+#define ALIA_UNTRACKED_SWITCH(expression)                                      \
+    ALIA_UNTRACKED_SWITCH_(ctx, expression)
+
+#ifdef ALIA_LOWERCASE_MACROS
+
+#define alia_untracked_switch_(ctx, x) ALIA_UNTRACKED_SWITCH_(ctx, x)
+#define alia_untracked_switch(x) ALIA_UNTRACKED_SWITCH(x)
+
+#endif
+
+} // namespace alia
+
+
+// This file implements utilities for routing events through an alia content
+// traversal function.
+//
+// In alia, the application defines the contents of the scene dynamically by
+// iterating through the current objects in the scene and calling a
+// library-provided function to specify the existence of each of them.
+//
+// This traversal function serves as a way to dispatch and handle events.
+// However, in cases where the event only needs to go to a single object in the
+// scene, the overhead of having the traversal function visit every other object
+// can be problematic. The overhead can be reduced by having the traversal
+// function skip over subregions of the scene when they're not relevant to the
+// event.
+//
+// This file provides a system for defining a hierarchy of such subregions in
+// the scene, identifying which subregion an event is targeted at, and culling
+// out irrelevant subregions.
+
+namespace alia {
+
+struct system;
+struct routing_region;
+
+typedef std::shared_ptr<routing_region> routing_region_ptr;
+
+struct routing_region
+{
+    routing_region_ptr parent;
+};
+
+struct event_routing_path
+{
+    routing_region* node;
+    event_routing_path* rest;
+};
+
+struct event_traversal
+{
+    routing_region_ptr* active_region;
+    bool targeted;
+    event_routing_path* path_to_target;
+    std::type_info const* event_type;
+    void* event;
+};
+
+template<class Context>
+routing_region_ptr
+get_active_routing_region(Context ctx)
+{
+    event_traversal& traversal = get_event_traversal(ctx);
+    return traversal.active_region ? *traversal.active_region
+                                   : routing_region_ptr();
+}
+
+// Set up the event traversal so that it will route the control flow to the
+// given target. (And also invoke the traversal.)
+// :target can be null, in which case no (further) routing will be done.
+void
+route_event(system& sys, event_traversal& traversal, routing_region* target);
+
+template<class Event>
+void
+dispatch_targeted_event(
+    system& sys, Event& event, routing_region_ptr const& target)
+{
+    event_traversal traversal;
+    traversal.active_region = 0;
+    traversal.targeted = true;
+    traversal.path_to_target = 0;
+    traversal.event_type = &typeid(Event);
+    traversal.event = &event;
+    route_event(sys, traversal, target.get());
+}
+
+template<class Event>
+void
+dispatch_event(system& sys, Event& event)
+{
+    event_traversal traversal;
+    traversal.active_region = 0;
+    traversal.targeted = false;
+    traversal.path_to_target = 0;
+    traversal.event_type = &typeid(Event);
+    traversal.event = &event;
+    route_event(sys, traversal, 0);
+}
+
+struct scoped_routing_region
+{
+    scoped_routing_region() : traversal_(0)
+    {
+    }
+    scoped_routing_region(context ctx)
+    {
+        begin(ctx);
+    }
+    ~scoped_routing_region()
+    {
+        end();
+    }
+
+    void
+    begin(context ctx);
+
+    void
+    end();
+
+    bool
+    is_relevant() const
+    {
+        return is_relevant_;
+    }
+
+ private:
+    event_traversal* traversal_;
+    routing_region_ptr* parent_;
+    bool is_relevant_;
+};
+
+template<class Event>
+bool
+detect_event(context ctx, Event** event)
+{
+    event_traversal& traversal = get_event_traversal(ctx);
+    if (*traversal.event_type == typeid(Event))
+    {
+        *event = reinterpret_cast<Event*>(traversal.event);
+        return true;
+    }
+    return false;
+}
+
+template<class Event, class Context, class Handler>
+void
+handle_event(Context ctx, Handler const& handler)
+{
+    Event* e;
+    ALIA_UNTRACKED_IF(detect_event(ctx, &e))
+    {
+        handler(ctx, *e);
+    }
+    ALIA_END
+}
+
+// the refresh event
+struct refresh_event
+{
+};
+
+static inline bool
+is_refresh_event(context ctx)
+{
+    refresh_event* e;
+    return detect_event(ctx, &e);
+}
+
+} // namespace alia
+
+
 namespace alia {
 
 // lazy_apply(f, args...), where :args are all signals, yields a signal
@@ -2904,15 +3401,18 @@ process_apply_args(
 {
     captured_id* cached_id;
     get_cached_data(ctx, &cached_id);
-    if (!signal_is_readable(arg))
+    if (is_refresh_event(ctx))
     {
-        reset(data);
-        args_ready = false;
-    }
-    else if (!cached_id->matches(arg.value_id()))
-    {
-        reset(data);
-        cached_id->capture(arg.value_id());
+        if (!signal_is_readable(arg))
+        {
+            reset(data);
+            args_ready = false;
+        }
+        else if (!cached_id->matches(arg.value_id()))
+        {
+            reset(data);
+            cached_id->capture(arg.value_id());
+        }
     }
     process_apply_args(ctx, data, args_ready, rest...);
 }
@@ -2924,10 +3424,10 @@ apply(context ctx, Function const& f, Args const&... args)
     apply_result_data<decltype(f(read_signal(args)...))>* data_ptr;
     get_cached_data(ctx, &data_ptr);
     auto& data = *data_ptr;
-    if (is_refresh_pass(ctx))
+    bool args_ready = true;
+    process_apply_args(ctx, data, args_ready, args...);
+    if (is_refresh_event(ctx))
     {
-        bool args_ready = true;
-        process_apply_args(ctx, data, args_ready, args...);
         if (data.status == apply_status::UNCOMPUTED && args_ready)
         {
             try
@@ -3856,520 +4356,6 @@ inline bool
 always_ready()
 {
     return true;
-}
-
-} // namespace alia
-
-
-
-
-namespace alia {
-
-// The following are utilities that are used to implement the control flow
-// macros. They shouldn't be used directly by applications.
-
-struct if_block : noncopyable
-{
-    if_block(data_traversal& traversal, bool condition);
-
- private:
-    scoped_data_block scoped_data_block_;
-};
-
-struct switch_block : noncopyable
-{
-    template<class Context>
-    switch_block(Context& ctx)
-    {
-        nc_.begin(ctx);
-    }
-    template<class Id>
-    void
-    activate_case(Id id)
-    {
-        active_case_.end();
-        active_case_.begin(nc_, make_id(id), manual_delete(true));
-    }
-
- private:
-    naming_context nc_;
-    named_block active_case_;
-};
-
-struct loop_block : noncopyable
-{
-    loop_block(data_traversal& traversal);
-    ~loop_block();
-    data_block&
-    block() const
-    {
-        return *block_;
-    }
-    data_traversal&
-    traversal() const
-    {
-        return *traversal_;
-    }
-    void
-    next();
-
- private:
-    data_traversal* traversal_;
-    data_block* block_;
-};
-
-// The following are macros used to annotate control flow.
-// They are used exactly like their C equivalents, but all require an alia_end
-// after the end of their scope.
-// Also note that all come in two forms. One form ends in an underscore and
-// takes the context as its first argument. The other form has no trailing
-// underscore and assumes that the context is a variable named 'ctx'.
-
-// condition_is_true(x), where x is a signal whose value is testable in a
-// boolean context, returns true iff x is readable and its value is true.
-template<class Signal>
-std::enable_if_t<is_readable_signal_type<Signal>::value, bool>
-condition_is_true(Signal const& x)
-{
-    return signal_is_readable(x) && (read_signal(x) ? true : false);
-}
-
-// condition_is_false(x), where x is a signal whose value is testable in a
-// boolean context, returns true iff x is readable and its value is false.
-template<class Signal>
-std::enable_if_t<is_readable_signal_type<Signal>::value, bool>
-condition_is_false(Signal const& x)
-{
-    return signal_is_readable(x) && (read_signal(x) ? false : true);
-}
-
-// condition_is_readable(x), where x is a readable signal type, calls
-// signal_is_readable.
-template<class Signal>
-std::enable_if_t<is_readable_signal_type<Signal>::value, bool>
-condition_is_readable(Signal const& x)
-{
-    return signal_is_readable(x);
-}
-
-// read_condition(x), where x is a readable signal type, calls read_signal.
-template<class Signal>
-std::enable_if_t<
-    is_readable_signal_type<Signal>::value,
-    typename Signal::value_type>
-read_condition(Signal const& x)
-{
-    return read_signal(x);
-}
-
-// ALIA_STRICT_CONDITIONALS disables the definitions that allow non-signals to
-// be used in if/else/switch macros.
-#ifndef ALIA_STRICT_CONDITIONALS
-
-// condition_is_true(x) evaluates x in a boolean context.
-template<class T>
-std::enable_if_t<!is_signal_type<T>::value, bool>
-condition_is_true(T x)
-{
-    return x ? true : false;
-}
-
-// condition_is_false(x) evaluates x in a boolean context and inverts it.
-template<class T>
-std::enable_if_t<!is_signal_type<T>::value, bool>
-condition_is_false(T x)
-{
-    return x ? false : true;
-}
-
-// condition_is_readable(x), where x is NOT a signal type, always returns true.
-template<class T>
-std::enable_if_t<!is_signal_type<T>::value, bool>
-condition_is_readable(T const& x)
-{
-    return true;
-}
-
-// read_condition(x), where x is NOT a signal type, simply returns x.
-template<class T>
-std::enable_if_t<!is_signal_type<T>::value, T const&>
-read_condition(T const& x)
-{
-    return x;
-}
-
-#endif
-
-// if, else_if, else
-
-#define ALIA_IF_(ctx, condition)                                               \
-    {                                                                          \
-        bool _alia_else_condition ALIA_UNUSED;                                 \
-        {                                                                      \
-            auto const& _alia_condition = (condition);                         \
-            bool _alia_if_condition                                            \
-                = ::alia::condition_is_true(_alia_condition);                  \
-            _alia_else_condition                                               \
-                = ::alia::condition_is_false(_alia_condition);                 \
-            ::alia::if_block _alia_if_block(                                   \
-                get_data_traversal(ctx), _alia_if_condition);                  \
-            if (_alia_if_condition)                                            \
-            {
-
-#define ALIA_IF(condition) ALIA_IF_(ctx, condition)
-
-#define ALIA_ELSE_IF_(ctx, condition)                                          \
-    }                                                                          \
-    }                                                                          \
-    {                                                                          \
-        auto const& _alia_condition = (condition);                             \
-        bool _alia_else_if_condition                                           \
-            = _alia_else_condition                                             \
-              && ::alia::condition_is_true(_alia_condition);                   \
-        _alia_else_condition = _alia_else_condition                            \
-                               && ::alia::condition_is_false(_alia_condition); \
-        ::alia::if_block _alia_if_block(                                       \
-            get_data_traversal(ctx), _alia_else_if_condition);                 \
-        if (_alia_else_if_condition)                                           \
-        {
-
-#define ALIA_ELSE_IF(condition) ALIA_ELSE_IF_(ctx, condition)
-
-#define ALIA_ELSE_(ctx)                                                        \
-    }                                                                          \
-    }                                                                          \
-    {                                                                          \
-        ::alia::if_block _alia_if_block(                                       \
-            get_data_traversal(ctx), _alia_else_condition);                    \
-        if (_alia_else_condition)                                              \
-        {
-
-#define ALIA_ELSE ALIA_ELSE_(ctx)
-
-#ifdef ALIA_LOWERCASE_MACROS
-#define alia_if_(ctx, condition) ALIA_IF_(ctx, condition)
-#define alia_if(condition) ALIA_IF(condition)
-#define alia_else_if_(ctx, condition) ALIA_ELSE_IF_(ctx, condition)
-#define alia_else_if(condition) ALIA_ELSE_IF(condition)
-#define alia_else_(ctx) ALIA_ELSE(ctx)
-#define alia_else ALIA_ELSE
-#endif
-
-// switch
-
-#define ALIA_SWITCH_(ctx, x)                                                   \
-    {                                                                          \
-        ::alia::switch_block _alia_switch_block(ctx);                          \
-        if (::alia::condition_is_readable(x))                                  \
-        {                                                                      \
-            switch (::alia::read_condition(x))                                 \
-            {
-
-#define ALIA_SWITCH(x) ALIA_SWITCH_(ctx, x)
-
-#define ALIA_CONCATENATE_HELPER(a, b) a##b
-#define ALIA_CONCATENATE(a, b) ALIA_CONCATENATE_HELPER(a, b)
-
-#define ALIA_CASE_(ctx, c)                                                     \
-    case c:                                                                    \
-        _alia_switch_block.activate_case(c);                                   \
-        goto ALIA_CONCATENATE(_alia_dummy_label_, __LINE__);                   \
-        ALIA_CONCATENATE(_alia_dummy_label_, __LINE__)
-
-#define ALIA_CASE(c) ALIA_CASE_(ctx, c)
-
-#define ALIA_DEFAULT_(ctx)                                                     \
-    default:                                                                   \
-        _alia_switch_block.activate_case("_alia_default_case");                \
-        goto ALIA_CONCATENATE(_alia_dummy_label_, __LINE__);                   \
-        ALIA_CONCATENATE(_alia_dummy_label_, __LINE__)
-
-#define ALIA_DEFAULT ALIA_DEFAULT_(ctx)
-
-#ifdef ALIA_LOWERCASE_MACROS
-#define alia_switch_(ctx, x) ALIA_SWITCH_(ctx, x)
-#define alia_switch(x) ALIA_SWITCH(x)
-#define alia_case_(ctx, c) ALIA_CASE(ctx, c)
-#define alia_case(c) ALIA_CASE(c)
-#define alia_default_(ctx) ALIA_DEFAULT_(ctx)
-#define alia_default ALIA_DEFAULT
-#endif
-
-// for
-
-#define ALIA_FOR_(ctx, x)                                                      \
-    {                                                                          \
-        {                                                                      \
-            ::alia::loop_block _alia_looper(get_data_traversal(ctx));          \
-            for (x)                                                            \
-            {                                                                  \
-                ::alia::scoped_data_block _alia_scope;                         \
-                _alia_scope.begin(                                             \
-                    _alia_looper.traversal(), _alia_looper.block());           \
-                _alia_looper.next();
-
-#define ALIA_FOR(x) ALIA_FOR_(ctx, x)
-
-#ifdef ALIA_LOWERCASE_MACROS
-#define alia_for_(ctx, x) ALIA_FOR_(ctx, x)
-#define alia_for(x) ALIA_FOR(x)
-#endif
-
-// while
-
-#define ALIA_WHILE_(ctx, x)                                                    \
-    {                                                                          \
-        {                                                                      \
-            ::alia::loop_block _alia_looper(get_data_traversal(ctx));          \
-            while (x)                                                          \
-            {                                                                  \
-                ::alia::scoped_data_block _alia_scope;                         \
-                _alia_scope.begin(                                             \
-                    _alia_looper.traversal(), _alia_looper.block());           \
-                _alia_looper.next();
-
-#define ALIA_WHILE(x) ALIA_WHILE_(ctx, x)
-
-#ifdef ALIA_LOWERCASE_MACROS
-#define alia_while_(ctx, x) ALIA_WHILE_(ctx, x)
-#define alia_while(x) ALIA_WHILE(x)
-#endif
-
-// end
-
-#define ALIA_END                                                               \
-    }                                                                          \
-    }                                                                          \
-    }
-
-#ifdef ALIA_LOWERCASE_MACROS
-#define alia_end ALIA_END
-#endif
-
-// The following macros are substitutes for normal C++ control flow statements.
-// Unlike alia_if and company, they do NOT track control flow. Instead, they
-// convert your context variable to a dataless_context within the block.
-// This means that any attempt to retrieve data within the block will result
-// in an error (as it should).
-
-#define ALIA_REMOVE_DATA_TRACKING(ctx)                                         \
-    typename decltype(ctx)::storage_type _alia_storage;                        \
-    auto _alia_ctx                                                             \
-        = alia::remove_component<data_traversal_tag>(&_alia_storage, ctx);     \
-    auto ctx = _alia_ctx;
-
-#define ALIA_UNTRACKED_IF_(ctx, condition)                                     \
-    if (alia::condition_is_true(condition))                                    \
-    {                                                                          \
-        ALIA_REMOVE_DATA_TRACKING(ctx)                                         \
-        {                                                                      \
-            {
-
-#define ALIA_UNTRACKED_IF(condition) ALIA_UNTRACKED_IF_(ctx, condition)
-
-#define ALIA_UNTRACKED_ELSE_IF_(ctx, condition)                                \
-    }                                                                          \
-    }                                                                          \
-    }                                                                          \
-    else if (alia::condition_is_true(condition))                               \
-    {                                                                          \
-        ALIA_REMOVE_DATA_TRACKING(ctx)                                         \
-        {                                                                      \
-            {
-
-#define ALIA_UNTRACKED_ELSE_IF(condition)                                      \
-    ALIA_UNTRACKED_ELSE_IF_(ctx, condition)
-
-#define ALIA_UNTRACKED_ELSE_(ctx)                                              \
-    }                                                                          \
-    }                                                                          \
-    }                                                                          \
-    else                                                                       \
-    {                                                                          \
-        ALIA_REMOVE_DATA_TRACKING(ctx)                                         \
-        {                                                                      \
-            {
-
-#define ALIA_UNTRACKED_ELSE ALIA_UNTRACKED_ELSE_(ctx)
-
-#ifdef ALIA_LOWERCASE_MACROS
-
-#define alia_untracked_if_(ctx, condition) ALIA_UNTRACKED_IF_(ctx, condition)
-#define alia_untracked_if(condition) ALIA_UNTRACKED_IF(condition)
-#define alia_untracked_else_if_(ctx, condition)                                \
-    ALIA_UNTRACKED_ELSE_IF_(ctx, condition)
-#define alia_untracked_else_if(condition) ALIA_UNTRACKED_ELSE_IF(condition)
-#define alia_untracked_else_(ctx) ALIA_UNTRACKED_ELSE(ctx)
-#define alia_untracked_else ALIA_UNTRACKED_ELSE
-
-#endif
-
-#define ALIA_UNTRACKED_SWITCH_(ctx, expression)                                \
-    {                                                                          \
-        {                                                                      \
-            auto _alia_value = (expression);                                   \
-            ALIA_REMOVE_DATA_TRACKING(ctx)                                     \
-            switch (_alia_value)                                               \
-            {
-
-#define ALIA_UNTRACKED_SWITCH(expression)                                      \
-    ALIA_UNTRACKED_SWITCH_(ctx, expression)
-
-#ifdef ALIA_LOWERCASE_MACROS
-
-#define alia_untracked_switch_(ctx, x) ALIA_UNTRACKED_SWITCH_(ctx, x)
-#define alia_untracked_switch(x) ALIA_UNTRACKED_SWITCH(x)
-
-#endif
-
-} // namespace alia
-
-
-// This file implements utilities for routing events through an alia content
-// traversal function.
-//
-// In alia, the application defines the contents of the scene dynamically by
-// iterating through the current objects in the scene and calling a
-// library-provided function to specify the existence of each of them.
-//
-// This traversal function serves as a way to dispatch and handle events.
-// However, in cases where the event only needs to go to a single object in the
-// scene, the overhead of having the traversal function visit every other object
-// can be problematic. The overhead can be reduced by having the traversal
-// function skip over subregions of the scene when they're not relevant to the
-// event.
-//
-// This file provides a system for defining a hierarchy of such subregions in
-// the scene, identifying which subregion an event is targeted at, and culling
-// out irrelevant subregions.
-
-namespace alia {
-
-struct system;
-struct routing_region;
-
-typedef std::shared_ptr<routing_region> routing_region_ptr;
-
-struct routing_region
-{
-    routing_region_ptr parent;
-};
-
-struct event_routing_path
-{
-    routing_region* node;
-    event_routing_path* rest;
-};
-
-struct event_traversal
-{
-    routing_region_ptr* active_region;
-    bool targeted;
-    event_routing_path* path_to_target;
-    std::type_info const* event_type;
-    void* event;
-};
-
-template<class Context>
-routing_region_ptr
-get_active_routing_region(Context ctx)
-{
-    event_traversal& traversal = get_event_traversal(ctx);
-    return traversal.active_region ? *traversal.active_region
-                                   : routing_region_ptr();
-}
-
-// Set up the event traversal so that it will route the control flow to the
-// given target. (And also invoke the traversal.)
-// :target can be null, in which case no (further) routing will be done.
-void
-route_event(system& sys, event_traversal& traversal, routing_region* target);
-
-template<class Event>
-void
-dispatch_targeted_event(
-    system& sys, Event& event, routing_region_ptr const& target)
-{
-    event_traversal traversal;
-    traversal.active_region = 0;
-    traversal.targeted = true;
-    traversal.path_to_target = 0;
-    traversal.event_type = &typeid(Event);
-    traversal.event = &event;
-    route_event(sys, traversal, target.get());
-}
-
-template<class Event>
-void
-dispatch_event(system& sys, Event& event)
-{
-    event_traversal traversal;
-    traversal.active_region = 0;
-    traversal.targeted = false;
-    traversal.path_to_target = 0;
-    traversal.event_type = &typeid(Event);
-    traversal.event = &event;
-    route_event(sys, traversal, 0);
-}
-
-struct scoped_routing_region
-{
-    scoped_routing_region() : traversal_(0)
-    {
-    }
-    scoped_routing_region(context ctx)
-    {
-        begin(ctx);
-    }
-    ~scoped_routing_region()
-    {
-        end();
-    }
-
-    void
-    begin(context ctx);
-
-    void
-    end();
-
-    bool
-    is_relevant() const
-    {
-        return is_relevant_;
-    }
-
- private:
-    event_traversal* traversal_;
-    routing_region_ptr* parent_;
-    bool is_relevant_;
-};
-
-bool
-detect_event(context ctx, std::type_info const& type);
-
-template<class Event>
-bool
-detect_event(context ctx, Event** event)
-{
-    event_traversal& traversal = get_event_traversal(ctx);
-    if (*traversal.event_type == typeid(Event))
-    {
-        *event = reinterpret_cast<Event*>(traversal.event);
-        return true;
-    }
-    return false;
-}
-
-template<class Event, class Context, class Handler>
-void
-handle_event(Context ctx, Handler const& handler)
-{
-    Event* e;
-    ALIA_UNTRACKED_IF(detect_event(ctx, &e))
-    {
-        handler(ctx, *e);
-    }
-    ALIA_END
 }
 
 } // namespace alia
@@ -5489,13 +5475,13 @@ struct state_holder
 
     // If you REALLY need direct, non-const access to the underlying state,
     // you can use this. It returns a non-const reference to the value and
-    // increments the version number.
+    // increments the version number (assuming you'll make some changes).
     //
     // Note that you should be careful to use this atomically. In other words,
     // call this to get a reference, do your update, and then discard the
     // reference before anyone else observes the state. If you hold onto the
     // reference and continue making changes while other alia code is accessing
-    // it, you'll cause them to go out-of-sync.
+    // it, they'll end up with outdated views of the state.
     //
     // Also note that if you call this on an uninitialized state, you're
     // expected to initialize it.
@@ -5565,12 +5551,12 @@ make_state_signal(state_holder<Value>& state)
 }
 
 // get_state(ctx, initial_value) returns a signal carrying some persistent local
-// state whose initial value is determined by the signal :initial_value. The
+// state whose initial value is determined by the :initial_value signal. The
 // returned signal will not be readable until :initial_value is readable (or
 // a value is explicitly written to the state signal).
-template<class InitialValue>
+template<class Context, class InitialValue>
 auto
-get_state(context ctx, InitialValue const& initial_value)
+get_state(Context ctx, InitialValue const& initial_value)
 {
     state_holder<typename InitialValue::value_type>* state;
     get_data(ctx, &state);
@@ -5609,6 +5595,13 @@ make_printf_friendly(std::string const& x)
     return x.c_str();
 }
 
+struct printf_format_error : exception
+{
+    printf_format_error() : exception("printf format error")
+    {
+    }
+};
+
 template<class... Args>
 std::string
 invoke_snprintf(std::string const& format, Args const&... args)
@@ -5616,7 +5609,7 @@ invoke_snprintf(std::string const& format, Args const&... args)
     int length
         = std::snprintf(0, 0, format.c_str(), make_printf_friendly(args)...);
     if (length < 0)
-        throw "printf format error";
+        throw printf_format_error();
     std::string s;
     if (length > 0)
     {
@@ -5644,16 +5637,6 @@ printf(context ctx, char const* format, Args const&... args)
 } // namespace alia
 
 #ifdef ALIA_IMPLEMENTATION
-
-namespace alia {
-
-bool
-is_refresh_pass(context ctx)
-{
-    return get_data_traversal(ctx).gc_enabled;
-}
-
-} // namespace alia
 #include <typeinfo>
 
 namespace alia {
@@ -5721,6 +5704,25 @@ bool
 operator<(captured_id const& a, captured_id const& b)
 {
     return b.is_initialized() && (!a.is_initialized() || a.get() < b.get());
+}
+
+} // namespace alia
+
+namespace alia {
+
+context
+make_context(
+    context_component_storage* storage,
+    system* sys,
+    event_traversal* event,
+    data_traversal* data)
+{
+    return add_component<data_traversal_tag>(
+        add_component<event_traversal_tag>(
+            add_component<system_tag>(
+                make_empty_component_collection(storage), sys),
+            event),
+        data);
 }
 
 } // namespace alia
@@ -6212,14 +6214,16 @@ scoped_routing_region::end()
 static void
 invoke_controller(system& sys, event_traversal& events)
 {
+    bool is_refresh = (events.event_type == &typeid(refresh_event));
+
     data_traversal data;
     scoped_data_traversal sdt(sys.data, data);
+    // Only use refresh events to decide when data is no longer needed.
+    data.gc_enabled = data.cache_clearing_enabled = is_refresh;
 
-    component_storage storage;
-    add_component<data_traversal_tag>(storage, &data);
-    add_component<event_traversal_tag>(storage, &events);
+    context_component_storage storage;
+    context ctx = make_context(&storage, &sys, &events, &data);
 
-    context ctx(&storage);
     sys.controller(ctx);
 }
 

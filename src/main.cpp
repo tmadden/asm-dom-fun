@@ -182,7 +182,7 @@ struct bidirectional_text_signal : signal<
 };
 template<class Signal>
 bidirectional_text_signal<Signal>
-as_bidirectional_text(context& ctx, Signal x)
+as_bidirectional_text(context ctx, Signal x)
 {
     bidirectional_text_data<typename Signal::value_type>* data;
     get_cached_data(ctx, &data);
@@ -290,10 +290,16 @@ get_widget_id(context ctx)
     return id;
 }
 
-struct refresh_event
+struct dom_context_info
 {
     asmdom::Children* current_children;
 };
+ALIA_DEFINE_COMPONENT_TYPE(dom_context_info_tag, dom_context_info*)
+
+dom_context_info the_context_info;
+
+typedef alia::add_component_type_t<alia::context, dom_context_info_tag>
+    dom_context;
 
 struct click_event
 {
@@ -310,11 +316,12 @@ void
 refresh();
 
 void
-do_text(context ctx, readable<std::string> text)
+do_text(dom_context ctx, readable<std::string> text)
 {
     handle_event<refresh_event>(ctx, [text](auto ctx, auto& e) {
-        e.current_children->push_back(asmdom::h(
-            "p", signal_is_readable(text) ? read_signal(text) : string()));
+        get_component<dom_context_info_tag>(ctx)->current_children->push_back(
+            asmdom::h(
+                "p", signal_is_readable(text) ? read_signal(text) : string()));
     });
 }
 
@@ -325,7 +332,7 @@ struct input_data
 };
 
 void
-do_number_input_(context ctx, bidirectional<string> value)
+do_number_input_(dom_context ctx, bidirectional<string> value)
 {
     input_data* data;
     get_cached_data(ctx, &data);
@@ -353,33 +360,35 @@ do_number_input_(context ctx, bidirectional<string> value)
     auto route = get_active_routing_region(ctx);
 
     handle_event<refresh_event>(ctx, [=](auto ctx, auto& e) {
-        e.current_children->push_back(asmdom::h(
-            "input",
-            asmdom::Data(
-                asmdom::Attrs{{"type", "number"}},
-                asmdom::Props{{"value", emscripten::val(data->value)}},
-                asmdom::Callbacks{
-                    {"oninput", [=](emscripten::val e) {
-                         auto start = std::chrono::system_clock::now();
+        get_component<dom_context_info_tag>(ctx)->current_children->push_back(
+            asmdom::h(
+                "input",
+                asmdom::Data(
+                    asmdom::Attrs{{"type", "number"}},
+                    asmdom::Props{{"value", emscripten::val(data->value)}},
+                    asmdom::Callbacks{
+                        {"oninput", [=](emscripten::val e) {
+                             auto start = std::chrono::system_clock::now();
 
-                         value_update_event update;
-                         update.id = id;
-                         update.value = e["target"]["value"].as<std::string>();
-                         dispatch_targeted_event(the_system, update, route);
-                         refresh();
+                             value_update_event update;
+                             update.id = id;
+                             update.value
+                                 = e["target"]["value"].as<std::string>();
+                             dispatch_targeted_event(the_system, update, route);
+                             refresh();
 
-                         std::cout << update.value << std::endl;
+                             std::cout << update.value << std::endl;
 
-                         auto end = std::chrono::system_clock::now();
+                             auto end = std::chrono::system_clock::now();
 
-                         std::chrono::duration<double> elapsed_seconds
-                             = end - start;
-                         std::cout
-                             << "elapsed time: " << elapsed_seconds.count()
-                             << "s\n";
+                             std::chrono::duration<double> elapsed_seconds
+                                 = end - start;
+                             std::cout
+                                 << "elapsed time: " << elapsed_seconds.count()
+                                 << "s\n";
 
-                         return true;
-                     }}})));
+                             return true;
+                         }}})));
     });
     handle_event<value_update_event>(ctx, [=](auto ctx, auto& e) {
         {
@@ -400,44 +409,45 @@ do_number_input_(context ctx, bidirectional<string> value)
 
 template<class Signal>
 void
-do_number_input(context ctx, Signal value)
+do_number_input(dom_context ctx, Signal value)
 {
     do_number_input_(ctx, as_bidirectional_text(ctx, value));
 }
 
 void
-do_button(context ctx, readable<std::string> text, action<> on_click)
+do_button(dom_context ctx, readable<std::string> text, action<> on_click)
 {
     auto id = get_widget_id(ctx);
     auto route = get_active_routing_region(ctx);
     handle_event<refresh_event>(ctx, [=](auto ctx, auto& e) {
         if (signal_is_readable(text))
         {
-            e.current_children->push_back(asmdom::h(
-                "button",
-                asmdom::Data(
-                    asmdom::Attrs{{"class", "btn btn-primary mr-1"}},
-                    asmdom::Callbacks{
-                        {"onclick",
-                         [=](emscripten::val) {
-                             auto start = std::chrono::system_clock::now();
+            get_component<dom_context_info_tag>(ctx)
+                ->current_children->push_back(asmdom::h(
+                    "button",
+                    asmdom::Data(
+                        asmdom::Attrs{{"class", "btn btn-primary mr-1"}},
+                        asmdom::Callbacks{
+                            {"onclick",
+                             [=](emscripten::val) {
+                                 auto start = std::chrono::system_clock::now();
 
-                             click_event click;
-                             click.id = id;
-                             dispatch_targeted_event(the_system, click, route);
-                             refresh();
+                                 click_event click;
+                                 click.id = id;
+                                 dispatch_targeted_event(
+                                     the_system, click, route);
+                                 refresh();
 
-                             auto end = std::chrono::system_clock::now();
+                                 auto end = std::chrono::system_clock::now();
 
-                             std::chrono::duration<double> elapsed_seconds
-                                 = end - start;
-                             std::cout
-                                 << "elapsed time: " << elapsed_seconds.count()
-                                 << "s\n";
+                                 std::chrono::duration<double> elapsed_seconds
+                                     = end - start;
+                                 std::cout << "elapsed time: "
+                                           << elapsed_seconds.count() << "s\n";
 
-                             return true;
-                         }}}),
-                read_signal(text)));
+                                 return true;
+                             }}}),
+                    read_signal(text)));
         }
     });
     handle_event<click_event>(ctx, [=](auto ctx, auto& e) {
@@ -454,9 +464,9 @@ void
 refresh()
 {
     asmdom::Children children;
+    the_context_info.current_children = &children;
 
     refresh_event event;
-    event.current_children = &children;
 
     dispatch_event(the_system, event);
 
@@ -474,8 +484,11 @@ refresh()
 std::vector<std::string> actions;
 
 void
-do_ui(context ctx)
+do_ui(context vanilla_ctx)
 {
+    dom_context ctx
+        = add_component<dom_context_info_tag>(vanilla_ctx, &the_context_info);
+
     // auto n = get_state(ctx, value(7));
     // do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), n));
     // do_button(ctx, "increase"_a, ++n);
