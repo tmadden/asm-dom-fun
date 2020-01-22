@@ -15,7 +15,7 @@ include(cmake/asm-dom.cmake)
 SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -s FETCH=1")
 
 # Add the main target.
-add_executable(main src/main.cpp)
+add_executable(main src/main.cpp src/color.cpp)
 set_property(TARGET main PROPERTY CXX_STANDARD 17)
 target_link_libraries(main PRIVATE asm-dom)
 
