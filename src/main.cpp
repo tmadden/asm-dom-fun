@@ -4,6 +4,7 @@
 
 #include "asm-dom.hpp"
 
+#include <emscripten/emscripten.h>
 #include <emscripten/fetch.h>
 #include <emscripten/val.h>
 
@@ -17,6 +18,8 @@
 #define ALIA_IMPLEMENTATION
 #define ALIA_LOWERCASE_MACROS
 #include "alia.hpp"
+
+#include "color.hpp"
 
 using std::string;
 
@@ -439,28 +442,29 @@ do_number_input_(dom_context ctx, bidirectional<string> value)
                              dispatch_targeted_event(the_system, update, route);
                              refresh();
 
-                             std::cout << update.value << std::endl;
+                             //  std::cout << update.value << std::endl;
 
                              auto end = std::chrono::system_clock::now();
 
                              std::chrono::duration<double> elapsed_seconds
                                  = end - start;
-                             std::cout
-                                 << "elapsed time: " << elapsed_seconds.count()
-                                 << "s\n";
+                             //  std::cout
+                             //      << "elapsed time: " <<
+                             //      elapsed_seconds.count()
+                             //      << "s\n";
 
                              return true;
                          }}})));
     });
     handle_event<value_update_event>(ctx, [=](auto ctx, auto& e) {
         {
-            std::cout << "UPDATE!: " << e.value << std::endl;
+            // std::cout << "UPDATE!: " << e.value << std::endl;
             if (e.id == id)
             {
-                std::cout << "ID matched" << std::endl;
+                // std::cout << "ID matched" << std::endl;
                 if (signal_is_writable(value))
                 {
-                    std::cout << "signal writable" << std::endl;
+                    // std::cout << "signal writable" << std::endl;
                     write_signal(value, e.value);
                 }
                 data->value = e.value;
@@ -504,8 +508,9 @@ do_button(dom_context ctx, readable<std::string> text, action<> on_click)
 
                                  std::chrono::duration<double> elapsed_seconds
                                      = end - start;
-                                 std::cout << "elapsed time: "
-                                           << elapsed_seconds.count() << "s\n";
+                                 //  std::cout << "elapsed time: "
+                                 //            << elapsed_seconds.count() <<
+                                 //            "s\n";
 
                                  return true;
                              }}}),
@@ -532,7 +537,7 @@ refresh()
 
     dispatch_event(the_system, event);
 
-    std::cout << children.size() << std::endl;
+    // std::cout << children.size() << std::endl;
 
     asmdom::VNode* root = asmdom::h(
         "div", asmdom::Data(asmdom::Attrs{{"class", "container"}}), children);
@@ -546,48 +551,89 @@ refresh()
 std::vector<std::string> actions;
 
 void
+do_colored_box(dom_context ctx, readable<rgb8> color)
+{
+    handle_event<refresh_event>(ctx, [color](auto ctx, auto& e) {
+        char style[64] = {'\0'};
+        if (signal_is_readable(color))
+        {
+            rgb8 const& c = read_signal(color);
+            sprintf(style, "background-color: #%02x%02x%02x", c.r, c.g, c.b);
+        }
+        std::cout << style << std::endl;
+        get_component<dom_context_info_tag>(ctx)->current_children->push_back(
+            asmdom::h(
+                "div",
+                asmdom::Data(asmdom::Attrs{{"class", "colored-box"},
+                                           {"style", style}})));
+    });
+}
+
+void
 do_ui(context vanilla_ctx)
 {
-    std::cout << "ticks: " << get_millisecond_counter() << std::endl;
+    // std::cout << "ticks: " << get_millisecond_counter() << std::endl;
 
     dom_context ctx
         = add_component<dom_context_info_tag>(vanilla_ctx, &the_context_info);
 
-    // auto n = get_state(ctx, value(7));
-    // do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), n));
-    // do_button(ctx, "increase"_a, ++n);
-    // do_button(ctx, "decrease"_a, --n);
+    // auto color = get_state(ctx, value(rgb8(0, 0, 0)));
 
-    // auto x = get_state(ctx, value(2));
-    // do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), x));
-    // do_number_input(ctx, fake_writability(x));
-    // do_button(ctx, "reset"_a, x <<= value(4));
+    auto color = value(interpolate(
+        rgb8(140, 40, 40),
+        rgb8(20, 20, 160),
+        abs(sin(get_millisecond_counter() / 1000.))));
 
+    do_colored_box(ctx, color);
+
+    // do_text(
+    //     ctx,
+    //     apply(
+    //         ctx,
+    //         ALIA_LAMBDIFY(std::to_string),
+    //         value(get_millisecond_counter())));
+
+    // do_button(ctx, "red"_a, color <<= value(rgb8(128, 64, 64)));
+
+    auto n = get_state(ctx, value(7));
+    do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), n));
+    do_button(ctx, "increase"_a, ++n);
+    do_button(ctx, "decrease"_a, --n);
+
+    auto x = get_state(ctx, value(2));
+    do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), x));
+    do_number_input(ctx, fake_writability(x));
+    do_button(ctx, "reset"_a, x <<= value(4));
+}
+
+void
+do_tip_calculator(dom_context ctx)
+{
     // Get the state we need.
     auto bill = get_state(ctx, empty<double>()); // defaults to uninitialized
     auto tip_percentage = get_state(ctx, value(20.)); // defaults to 20%
 
-    if (signal_is_readable(bill))
-    {
-        std::cout << "bill: " << read_signal(bill) << std::endl;
-    }
-    else
-    {
-        std::cout << "bill unreadable" << std::endl;
-    }
-    if (signal_is_readable(tip_percentage))
-    {
-        std::cout << "tip: " << read_signal(tip_percentage) << std::endl;
-    }
-    else
-    {
-        std::cout << "tip unreadable" << std::endl;
-    }
+    // if (signal_is_readable(bill))
+    // {
+    //     std::cout << "bill: " << read_signal(bill) << std::endl;
+    // }
+    // else
+    // {
+    //     std::cout << "bill unreadable" << std::endl;
+    // }
+    // if (signal_is_readable(tip_percentage))
+    // {
+    //     std::cout << "tip: " << read_signal(tip_percentage) << std::endl;
+    // }
+    // else
+    // {
+    //     std::cout << "tip unreadable" << std::endl;
+    // }
 
     // Show some controls for manipulating our state.
-    std::cout << "do bill" << std::endl;
+    // std::cout << "do bill" << std::endl;
     do_number_input(ctx, bill);
-    std::cout << "do tip" << std::endl;
+    // std::cout << "do tip" << std::endl;
     do_number_input(ctx, tip_percentage);
 
     // Do some reactive calculations.
@@ -727,6 +773,8 @@ int
 main()
 {
     the_system.controller = do_ui;
+
+    emscripten_set_main_loop(refresh, 0, 0);
 
     // Initialize asm-dom.
     asmdom::Config config = asmdom::Config();
