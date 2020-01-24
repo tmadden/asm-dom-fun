@@ -20,6 +20,7 @@
 #include "alia.hpp"
 
 #include "color.hpp"
+#include "timing.hpp"
 
 using std::string;
 
@@ -28,68 +29,17 @@ using namespace alia::literals;
 
 ////
 
-// Currently, alia's only sense of time is that of a monotonically increasing
-// millisecond counter. It's understood to have an arbitrary start point and is
-// allowed to wrap around, so 'unsigned' is considered sufficient.
-typedef unsigned millisecond_count;
+millisecond_count the_millisecond_tick_count;
 
 millisecond_count
-get_millisecond_counter()
+get_millisecond_tick_count()
 {
     static auto start = std::chrono::steady_clock::now();
-
     auto now = std::chrono::steady_clock::now();
-
-    auto ms
-        = std::chrono::duration_cast<
-              std::chrono::duration<millisecond_count, std::milli>>(now - start)
-              .count();
-
-    return ms;
-}
-
-struct node_identity
-{
-};
-typedef node_identity const* node_id;
-
-node_id
-get_node_id(context ctx)
-{
-    node_identity* id;
-    get_cached_data(ctx, &id);
-    return id;
-}
-
-// routable_node_id identifies a node with enough information that an event can
-// be routed to it.
-struct routable_node_id
-{
-    node_id id;
-    routing_region_ptr region;
-
-    routable_node_id() : id(0)
-    {
-    }
-    routable_node_id(node_id id, routing_region_ptr const& region)
-        : id(id), region(region)
-    {
-    }
-};
-static routable_node_id const null_node_id(0, routing_region_ptr());
-
-routable_node_id
-make_routable_node_id(dataless_context ctx, node_id id)
-{
-    return routable_node_id(id, get_active_routing_region(ctx));
-}
-
-template<class Event>
-void
-dispatch_targeted_event(
-    alia::system& sys, Event& event, routable_node_id const& id)
-{
-    dispatch_targeted_event(sys, event, id.region);
+    return std::chrono::duration_cast<
+               std::chrono::duration<millisecond_count, std::milli>>(
+               now - start)
+        .count();
 }
 
 ////
@@ -530,11 +480,12 @@ do_button(dom_context ctx, readable<std::string> text, action<> on_click)
 void
 refresh()
 {
+    the_millisecond_tick_count = get_millisecond_tick_count();
+
     asmdom::Children children;
     the_context_info.current_children = &children;
 
     refresh_event event;
-
     dispatch_event(the_system, event);
 
     // std::cout << children.size() << std::endl;
@@ -577,14 +528,36 @@ do_ui(context vanilla_ctx)
     dom_context ctx
         = add_component<dom_context_info_tag>(vanilla_ctx, &the_context_info);
 
+    // do_text(
+    //     ctx,
+    //     apply(
+    //         ctx, ALIA_LAMBDIFY(std::to_string),
+    //         get_animation_tick_count(ctx)));
+
     // auto color = get_state(ctx, value(rgb8(0, 0, 0)));
 
-    auto color = value(interpolate(
-        rgb8(140, 40, 40),
-        rgb8(20, 20, 160),
-        abs(sin(get_millisecond_counter() / 1000.))));
+    animation_timer timer(ctx);
+    ALIA_IF(timer.is_active())
+    {
+        do_text(
+            ctx,
+            apply(
+                ctx, ALIA_LAMBDIFY(std::to_string), value(timer.ticks_left())));
+    }
+    ALIA_ELSE
+    {
+        do_button(ctx, "start"_a, lambda_action(always_ready, [&]() {
+                      timer.start(1000);
+                  }));
+    }
+    ALIA_END
 
-    do_colored_box(ctx, color);
+    // auto color = lift(ctx, interpolate)(
+    //     value(rgb8(230, 230, 255)),
+    //     value(rgb8(40, 40, 160)),
+    //     lazy_lift(ALIA_LAMBDIFY(abs))(lazy_lift(ALIA_LAMBDIFY(sin))(
+    //         get_animation_tick_count(ctx) / value(1000.))));
+    // do_colored_box(ctx, color);
 
     // do_text(
     //     ctx,

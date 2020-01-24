@@ -2426,6 +2426,9 @@ struct system
     std::function<void(context)> controller;
 };
 
+void
+refresh_system(system& sys);
+
 } // namespace alia
 
 
@@ -3181,7 +3184,7 @@ struct scoped_routing_region
 
 template<class Event>
 bool
-detect_event(context ctx, Event** event)
+detect_event(dataless_context ctx, Event** event)
 {
     event_traversal& traversal = get_event_traversal(ctx);
     if (*traversal.event_type == typeid(Event))
@@ -3194,7 +3197,7 @@ detect_event(context ctx, Event** event)
 
 template<class Event, class Context, class Handler>
 void
-handle_event(Context ctx, Handler const& handler)
+handle_event(Context ctx, Handler&& handler)
 {
     Event* e;
     ALIA_UNTRACKED_IF(detect_event(ctx, &e))
@@ -3204,13 +3207,83 @@ handle_event(Context ctx, Handler const& handler)
     ALIA_END
 }
 
-// the refresh event
+struct node_identity
+{
+};
+typedef node_identity const* node_id;
+
+static inline node_id
+get_node_id(context ctx)
+{
+    node_identity* id;
+    get_cached_data(ctx, &id);
+    return id;
+}
+
+// routable_node_id identifies a node with enough information that an event can
+// be routed to it.
+struct routable_node_id
+{
+    node_id id = nullptr;
+    routing_region_ptr region;
+};
+
+static inline routable_node_id
+make_routable_node_id(dataless_context ctx, node_id id)
+{
+    return routable_node_id{id, get_active_routing_region(ctx)};
+}
+
+static routable_node_id const null_node_id;
+
+// Is the given routable_node_id valid?
+// (Only the null_node_id is invalid.)
+static inline bool
+is_valid(routable_node_id const& id)
+{
+    return id.id != nullptr;
+}
+
+struct targeted_event
+{
+    node_id target_id;
+};
+
+template<class Event>
+void
+dispatch_targeted_event(system& sys, Event& event, routable_node_id const& id)
+{
+    event.target_id = id.id;
+    dispatch_targeted_event(sys, event, id.region);
+}
+
+template<class Event>
+bool
+detect_targeted_event(dataless_context ctx, node_id id, Event** event)
+{
+    return detect_event(ctx, event) && (*event)->target_id == id;
+}
+
+template<class Event, class Context, class Handler>
+void
+handle_targeted_event(Context ctx, node_id id, Handler&& handler)
+{
+    Event* e;
+    ALIA_UNTRACKED_IF(detect_targeted_event(ctx, id, &e))
+    {
+        handler(ctx, *e);
+    }
+    ALIA_END
+}
+
+// the refresh event...
+
 struct refresh_event
 {
 };
 
 static inline bool
-is_refresh_event(context ctx)
+is_refresh_event(dataless_context ctx)
 {
     refresh_event* e;
     return detect_event(ctx, &e);
@@ -4885,6 +4958,51 @@ for_each(Context ctx, ContainerSignal const& container_signal, Fn const& fn)
 } // namespace alia
 
 
+namespace alia {
+
+// unit_cubic_bezier represents a cubic bezier whose end points are (0, 0)
+// and (1, 1).
+struct unit_cubic_bezier
+{
+    double p1x, p1y, p2x, p2y;
+};
+
+// unit_cubic_bezier_coefficients describes a unit cubic bezier curve by the
+// coefficients in its parametric equation form.
+struct unit_cubic_bezier_coefficients
+{
+    double ax, ay, bx, by, cx, cy;
+};
+
+unit_cubic_bezier_coefficients
+compute_curve_coefficients(unit_cubic_bezier const& bezier);
+
+// Solve for t at a point x in a unit cubic curve.
+// This should only be called on curves that are expressible in y = f(x) form.
+double
+solve_for_t_at_x(
+    unit_cubic_bezier_coefficients const& coeff,
+    double x,
+    double error_tolerance);
+
+// This is the same as above but always uses a bisection search.
+// It's simple but likely slower and is primarily exposed for testing purposes.
+double
+solve_for_t_at_x_with_bisection_search(
+    unit_cubic_bezier_coefficients const& coeff,
+    double x,
+    double error_tolerance);
+
+// Evaluate a unit_cubic_bezier at the given x value.
+// Since this is an approximation, the caller must specify a tolerance value
+// to control the error in the result.
+double
+eval_curve_at_x(
+    unit_cubic_bezier const& curve, double x, double error_tolerance);
+
+} // namespace alia
+
+
 #include <utility>
 #include <vector>
 
@@ -5726,6 +5844,20 @@ make_context(
 }
 
 } // namespace alia
+
+#include <chrono>
+
+
+namespace alia {
+
+void
+refresh_system(system& sys)
+{
+    refresh_event refresh;
+    dispatch_event(sys, refresh);
+}
+
+} // namespace alia
 #include <map>
 #include <vector>
 
@@ -6284,6 +6416,105 @@ void
 loop_block::next()
 {
     get_data(*traversal_, &block_);
+}
+
+} // namespace alia
+
+#include <cmath>
+
+namespace alia {
+
+namespace {
+
+double
+sample_curve_x(unit_cubic_bezier_coefficients const& coeff, double t)
+{
+    return ((coeff.ax * t + coeff.bx) * t + coeff.cx) * t;
+}
+
+double
+sample_curve_y(unit_cubic_bezier_coefficients const& coeff, double t)
+{
+    return ((coeff.ay * t + coeff.by) * t + coeff.cy) * t;
+}
+
+double
+sample_curve_derivative(unit_cubic_bezier_coefficients const& coeff, double t)
+{
+    return (3 * coeff.ax * t + 2 * coeff.bx) * t + coeff.cx;
+}
+
+} // namespace
+
+unit_cubic_bezier_coefficients
+compute_curve_coefficients(unit_cubic_bezier const& bezier)
+{
+    unit_cubic_bezier_coefficients coeff;
+    coeff.cx = 3 * bezier.p1x;
+    coeff.bx = 3 * (bezier.p2x - bezier.p1x) - coeff.cx;
+    coeff.ax = 1 - coeff.cx - coeff.bx;
+    coeff.cy = 3 * bezier.p1y;
+    coeff.by = 3 * (bezier.p2y - bezier.p1y) - coeff.cy;
+    coeff.ay = 1 - coeff.cy - coeff.by;
+    return coeff;
+}
+
+double
+solve_for_t_at_x_with_bisection_search(
+    unit_cubic_bezier_coefficients const& coeff,
+    double x,
+    double error_tolerance)
+{
+    double lower = 0.0;
+    double upper = 1.0;
+    double t = x;
+    while (true)
+    {
+        double x_at_t = sample_curve_x(coeff, t);
+        if (std::fabs(x_at_t - x) < error_tolerance)
+            return t;
+        if (x > x_at_t)
+            lower = t;
+        else
+            upper = t;
+        t = (lower + upper) / 2;
+    }
+}
+
+double
+solve_for_t_at_x(
+    unit_cubic_bezier_coefficients const& coeff,
+    double x,
+    double error_tolerance)
+{
+    // Newton's method should be faster, so try that first.
+    double t = x;
+    for (int i = 0; i != 8; ++i)
+    {
+        double x_error = sample_curve_x(coeff, t) - x;
+        if (std::fabs(x_error) < error_tolerance)
+            return t;
+        double dx = sample_curve_derivative(coeff, t);
+        if (std::fabs(dx) < 1e-6)
+            break;
+        t -= x_error / dx;
+    }
+
+    // If that fails, fallback to a bisection search.
+    return solve_for_t_at_x_with_bisection_search(coeff, x, error_tolerance);
+}
+
+double
+eval_curve_at_x(unit_cubic_bezier const& curve, double x, double epsilon)
+{
+    if (x <= 0)
+        return 0;
+    if (x >= 1)
+        return 1;
+
+    auto coeff = compute_curve_coefficients(curve);
+
+    return sample_curve_y(coeff, solve_for_t_at_x(coeff, x, epsilon));
 }
 
 } // namespace alia
