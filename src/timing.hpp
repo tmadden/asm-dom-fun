@@ -47,14 +47,14 @@ struct animation_timer_state
     millisecond_count end_tick;
 };
 
-struct animation_timer
+struct raw_animation_timer
 {
-    animation_timer(context ctx) : ctx_(ctx)
+    raw_animation_timer(context ctx) : ctx_(ctx)
     {
         get_cached_data(ctx, &state_);
         update();
     }
-    animation_timer(dataless_context ctx, animation_timer_state& state)
+    raw_animation_timer(dataless_context ctx, animation_timer_state& state)
         : ctx_(ctx), state_(&state)
     {
         update();
@@ -77,9 +77,6 @@ struct animation_timer
     }
 
  private:
-    dataless_context ctx_;
-    animation_timer_state* state_;
-
     void
     update()
     {
@@ -95,18 +92,58 @@ struct animation_timer
         }
     }
 
+    dataless_context ctx_;
+    animation_timer_state* state_;
     millisecond_count ticks_left_;
 };
 
-#if 0
+template<class Function, class... Args>
+auto
+make_parameterized_action(Function f, Args... args)
+{
+    return lambda_action(
+        [=]() { return signals_all_readable(args...); },
+        [=]() { return f(read_signal(args)...); });
+}
+
+struct animation_timer
+{
+    animation_timer(context ctx) : raw_(ctx)
+    {
+    }
+    animation_timer(dataless_context ctx, animation_timer_state& state)
+        : raw_(ctx, state)
+    {
+    }
+    auto
+    is_active() const
+    {
+        return value(raw_.is_active());
+    }
+    auto
+    ticks_left() const
+    {
+        return value(raw_.ticks_left());
+    }
+    auto
+    start(readable<millisecond_count> duration)
+    {
+        return make_parameterized_action(
+            [&](millisecond_count duration) { raw_.start(duration); },
+            duration);
+    }
+
+ private:
+    raw_animation_timer raw_;
+};
 
 // The following are interpolation curves that can be used for animations.
 typedef unit_cubic_bezier animation_curve;
-animation_curve static const default_curve(0.25, 0.1, 0.25, 1);
-animation_curve static const linear_curve(0, 0, 1, 1);
-animation_curve static const ease_in_curve(0.42, 0, 1, 1);
-animation_curve static const ease_out_curve(0, 0, 0.58, 1);
-animation_curve static const ease_in_out_curve(0.42, 0, 0.58, 1);
+animation_curve const default_curve = {0.25, 0.1, 0.25, 1};
+animation_curve const linear_curve = {0, 0, 1, 1};
+animation_curve const ease_in_curve = {0.42, 0, 1, 1};
+animation_curve const ease_out_curve = {0, 0, 0.58, 1};
+animation_curve const ease_in_out_curve = {0.42, 0, 0.58, 1};
 
 // animated_transition specifies an animated transition from one state to
 // another, defined by a duration and a curve to follow.
@@ -114,21 +151,8 @@ struct animated_transition
 {
     animation_curve curve;
     millisecond_count duration;
-
-    animated_transition()
-    {
-    }
-    animated_transition(
-        animation_curve const& curve, millisecond_count duration)
-        : curve(curve), duration(duration)
-    {
-    }
 };
-animated_transition static const default_transition(default_curve, 400);
-
-#endif
-
-#if 0
+animated_transition const default_transition = {default_curve, 400};
 
 // A value_smoother is used to create smoothly changing views of values that
 // actually change abruptly.
@@ -193,7 +217,7 @@ smooth_raw_value(
     if (smoother.in_transition)
     {
         millisecond_count ticks_left
-            = get_animation_ticks_left(ctx, smoother.transition_end);
+            = get_raw_animation_ticks_left(ctx, smoother.transition_end);
         if (ticks_left > 0)
         {
             double fraction = eval_curve_at_x(
@@ -206,17 +230,17 @@ smooth_raw_value(
         else
             smoother.in_transition = false;
     }
-    if (is_refresh_pass(ctx) && x != smoother.new_value)
+    if (is_refresh_event(ctx) && x != smoother.new_value)
     {
         smoother.duration =
             // If we're just going back to the old value, go back in the same
             // amount of time it took to get here.
             smoother.in_transition && x == smoother.old_value
                 ? (transition.duration
-                   - get_animation_ticks_left(ctx, smoother.transition_end))
+                   - get_raw_animation_ticks_left(ctx, smoother.transition_end))
                 : transition.duration;
         smoother.transition_end
-            = get_animation_tick_count(ctx) + smoother.duration;
+            = get_raw_animation_tick_count(ctx) + smoother.duration;
         smoother.old_value = current_value;
         smoother.new_value = x;
         smoother.in_transition = true;
@@ -224,50 +248,90 @@ smooth_raw_value(
     return current_value;
 }
 
-// If you don't need direct access to the smoother, this version will manage
-// it for you.
-template<class Value>
-Value
-smooth_raw_value(
-    context ctx,
-    Value const& x,
-    animated_transition const& transition = default_transition)
-{
-    value_smoother<Value>* data;
-    get_cached_data(ctx, &data);
-    return smooth_raw_value(ctx, *data, x, transition);
-}
-
-// smooth_value is analagous to smooth_raw_value, but it deals with accessors
+// smooth_value is analogous to smooth_raw_value, but it deals with signals
 // instead of raw values.
 
-template<class Value>
-optional_input_accessor<Value>
+template<class Wrapped>
+struct smoothed_signal : regular_signal<
+                             smoothed_signal<Wrapped>,
+                             typename Wrapped::value_type,
+                             typename Wrapped::direction_tag>
+{
+    smoothed_signal(
+        Wrapped wrapped, typename Wrapped::value_type smoothed_value)
+        : wrapped_(wrapped), smoothed_value_(smoothed_value)
+    {
+    }
+    id_interface const&
+    value_id() const
+    {
+        if (wrapped_.is_readable())
+        {
+            id_ = make_id(smoothed_value_);
+            return id_;
+        }
+        else
+            return no_id;
+    }
+    bool
+    is_readable() const
+    {
+        return wrapped_.is_readable();
+    }
+    typename Wrapped::value_type const&
+    read() const
+    {
+        return smoothed_value_;
+    }
+    bool
+    is_writable() const
+    {
+        return wrapped_.is_writable();
+    }
+    void
+    write(typename Wrapped::value_type const& value) const
+    {
+        return wrapped_.write(value);
+    }
+
+ private:
+    Wrapped wrapped_;
+    typename Wrapped::value_type smoothed_value_;
+    mutable simple_id<typename Wrapped::value_type> id_;
+};
+template<class Wrapped>
+smoothed_signal<Wrapped>
+make_smoothed_signal(
+    Wrapped wrapped, typename Wrapped::value_type smoothed_value)
+{
+    return smoothed_signal<Wrapped>(wrapped, smoothed_value);
+}
+
+template<class Value, class Signal>
+auto
 smooth_value(
     dataless_context ctx,
     value_smoother<Value>& smoother,
-    accessor<Value> const& x,
+    Signal x,
     animated_transition const& transition = default_transition)
 {
-    optional<Value> output;
-    if (is_gettable(x))
-        output = smooth_raw_value(ctx, smoother, get(x), transition);
-    return optional_in(output);
+    Value output;
+    if (signal_is_readable(x))
+        output = smooth_raw_value(ctx, smoother, read_signal(x), transition);
+    return smoothed_signal(x, output);
 }
 
-template<class Value>
-optional_input_accessor<Value>
+template<class Signal>
+auto
 smooth_value(
     context ctx,
-    accessor<Value> const& x,
+    Signal x,
     animated_transition const& transition = default_transition)
 {
-    value_smoother<Value>* data;
+    value_smoother<typename Signal::value_type>* data;
     get_cached_data(ctx, &data);
     return smooth_value(ctx, *data, x, transition);
 }
-
-#endif
 
 } // namespace alia
 

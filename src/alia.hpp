@@ -2486,6 +2486,20 @@ struct lazy_reader
     mutable Value value_;
 };
 
+// signals_all_readable(signal_a, signal_b, ...) is a variadic function that
+// returns true iff all its input signals are readable.
+static inline bool
+signals_all_readable()
+{
+    return true;
+}
+template<class Signal, class... Rest>
+bool
+signals_all_readable(Signal const& signal, Rest const&... rest)
+{
+    return signal_is_readable(signal) && signals_all_readable(rest...);
+}
+
 } // namespace alia
 
 
@@ -3231,7 +3245,10 @@ struct routable_node_id
 static inline routable_node_id
 make_routable_node_id(dataless_context ctx, node_id id)
 {
-    return routable_node_id{id, get_active_routing_region(ctx)};
+    routable_node_id routable;
+    routable.id = id;
+    routable.region = get_active_routing_region(ctx);
+    return routable;
 }
 
 static routable_node_id const null_node_id;
