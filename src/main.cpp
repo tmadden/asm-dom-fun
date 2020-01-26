@@ -362,8 +362,6 @@ do_number_input_(dom_context ctx, bidirectional<string> value)
     }
     else
     {
-        // Same logic as above, but consider the external text to be the empty
-        // string with no ID.
         if (!data->external_id.matches(no_id))
         {
             data->value = string();
@@ -534,23 +532,26 @@ do_ui(context vanilla_ctx)
     //         ctx, ALIA_LAMBDIFY(std::to_string),
     //         get_animation_tick_count(ctx)));
 
-    // auto color = get_state(ctx, value(rgb8(0, 0, 0)));
+    auto color = get_state(ctx, value(rgb8(0, 0, 0)));
 
-    animation_timer timer(ctx);
-    ALIA_IF(timer.is_active())
-    {
-        do_text(
-            ctx,
-            apply(
-                ctx, ALIA_LAMBDIFY(std::to_string), value(timer.ticks_left())));
-    }
-    ALIA_ELSE
-    {
-        do_button(ctx, "start"_a, lambda_action(always_ready, [&]() {
-                      timer.start(1000);
-                  }));
-    }
-    ALIA_END
+    do_button(ctx, "black"_a, color <<= value(rgb8(50, 50, 55)));
+    do_button(ctx, "white"_a, color <<= value(rgb8(230, 230, 255)));
+
+    do_colored_box(ctx, smooth_value(ctx, color));
+
+    // animation_timer timer(ctx);
+    // ALIA_IF(timer.is_active())
+    // {
+    //     do_text(
+    //         ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string),
+    //         timer.ticks_left()));
+    // }
+    // ALIA_ELSE
+    // {
+    //     do_button(ctx, "start"_a,
+    //     timer.start(value(millisecond_count(1000))));
+    // }
+    // ALIA_END
 
     // auto color = lift(ctx, interpolate)(
     //     value(rgb8(230, 230, 255)),
@@ -568,14 +569,15 @@ do_ui(context vanilla_ctx)
 
     // do_button(ctx, "red"_a, color <<= value(rgb8(128, 64, 64)));
 
-    auto n = get_state(ctx, value(7));
-    do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), n));
-    do_button(ctx, "increase"_a, ++n);
-    do_button(ctx, "decrease"_a, --n);
+    // auto n = get_state(ctx, value(7));
+    // do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), n));
+    // do_button(ctx, "increase"_a, ++n);
+    // do_button(ctx, "decrease"_a, --n);
 
-    auto x = get_state(ctx, value(2));
-    do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), x));
-    do_number_input(ctx, fake_writability(x));
+    auto x = get_state(ctx, value(4));
+    do_text(
+        ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), smooth_value(ctx, x)));
+    do_number_input(ctx, x);
     do_button(ctx, "reset"_a, x <<= value(4));
 }
 
