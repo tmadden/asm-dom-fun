@@ -1711,6 +1711,18 @@ struct is_bidirectional_signal_type : std::conditional_t<
 {
 };
 
+// When a value is written to a signal, the signal is allowed to throw a
+// validation_error if the value isn't acceptable.
+struct validation_error : exception
+{
+    validation_error(std::string const& message) : exception(message)
+    {
+    }
+    ~validation_error() throw()
+    {
+    }
+};
+
 } // namespace alia
 
 #include <cassert>
@@ -2488,7 +2500,7 @@ struct lazy_reader
 
 // signals_all_readable(signal_a, signal_b, ...) is a variadic function that
 // returns true iff all its input signals are readable.
-static inline bool
+inline bool
 signals_all_readable()
 {
     return true;
@@ -2623,15 +2635,6 @@ val(char const* text)
 
 // literal operators
 namespace literals {
-inline value_signal<unsigned long long int>
-operator"" _a(unsigned long long int n)
-{
-    return val(n);
-}
-inline value_signal<long double> operator"" _a(long double n)
-{
-    return val(n);
-}
 inline string_literal_signal operator"" _a(char const* s, size_t n)
 {
     return string_literal_signal(s);
@@ -3226,7 +3229,7 @@ struct node_identity
 };
 typedef node_identity const* node_id;
 
-static inline node_id
+inline node_id
 get_node_id(context ctx)
 {
     node_identity* id;
@@ -3242,7 +3245,7 @@ struct routable_node_id
     routing_region_ptr region;
 };
 
-static inline routable_node_id
+inline routable_node_id
 make_routable_node_id(dataless_context ctx, node_id id)
 {
     routable_node_id routable;
@@ -3255,7 +3258,7 @@ static routable_node_id const null_node_id;
 
 // Is the given routable_node_id valid?
 // (Only the null_node_id is invalid.)
-static inline bool
+inline bool
 is_valid(routable_node_id const& id)
 {
     return id.id != nullptr;
@@ -3299,7 +3302,7 @@ struct refresh_event
 {
 };
 
-static inline bool
+inline bool
 is_refresh_event(dataless_context ctx)
 {
     refresh_event* e;
@@ -3571,7 +3574,7 @@ ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(+)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(-)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(*)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(/)
-ALIA_DEFINE_BINARY_SIGNAL_OPERATOR (^)
+ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(^)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(%)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(&)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(|)
@@ -3597,7 +3600,7 @@ ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(>=)
             int> = 0>                                                          \
     auto operator op(A const& a, B const& b)                                   \
     {                                                                          \
-        return lazy_apply([](auto a, auto b) { return a op b; }, a, val(b)); \
+        return lazy_apply([](auto a, auto b) { return a op b; }, a, val(b));   \
     }                                                                          \
     template<                                                                  \
         class A,                                                               \
@@ -3607,14 +3610,14 @@ ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(>=)
             int> = 0>                                                          \
     auto operator op(A const& a, B const& b)                                   \
     {                                                                          \
-        return lazy_apply([](auto a, auto b) { return a op b; }, val(a), b); \
+        return lazy_apply([](auto a, auto b) { return a op b; }, val(a), b);   \
     }
 
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(+)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(-)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(*)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(/)
-ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR (^)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(^)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(%)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(&)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(|)
@@ -4426,7 +4429,7 @@ ALIA_DEFINE_COMPOUND_ASSIGNMENT_OPERATOR(|=, |)
             int> = 0>                                                          \
     auto operator assignment_form(A const& a, B const& b)                      \
     {                                                                          \
-        return a <<= (a normal_form val(b));                                 \
+        return a <<= (a normal_form val(b));                                   \
     }
 
 ALIA_DEFINE_LIBERAL_COMPOUND_ASSIGNMENT_OPERATOR(+=, +)
@@ -4448,14 +4451,14 @@ ALIA_DEFINE_LIBERAL_COMPOUND_ASSIGNMENT_OPERATOR(|=, |)
         std::enable_if_t<is_bidirectional_signal_type<A>::value, int> = 0>     \
     auto operator assignment_form(A const& a)                                  \
     {                                                                          \
-        return a <<= (a normal_form val(typename A::value_type(1)));         \
+        return a <<= (a normal_form val(typename A::value_type(1)));           \
     }                                                                          \
     template<                                                                  \
         class A,                                                               \
         std::enable_if_t<is_bidirectional_signal_type<A>::value, int> = 0>     \
     auto operator assignment_form(A const& a, int)                             \
     {                                                                          \
-        return a <<= (a normal_form val(typename A::value_type(1)));         \
+        return a <<= (a normal_form val(typename A::value_type(1)));           \
     }
 
 ALIA_DEFINE_BY_ONE_OPERATOR(++, +)
@@ -4463,15 +4466,15 @@ ALIA_DEFINE_BY_ONE_OPERATOR(--, -)
 
 #undef ALIA_DEFINE_BY_ONE_OPERATOR
 
-// make_toggle_action(flag), where :flag is a signal to a boolean, creates an
-// action that will toggle the value of :flag between true and false.
+// toggle(flag), where :flag is a signal to a boolean, creates an action that
+// will toggle the value of :flag between true and false.
 //
 // Note that this could also be used with other value types as long as the !
 // operator provides a reasonable "toggle" function.
 //
 template<class Flag>
 auto
-make_toggle_action(Flag const& flag)
+toggle(Flag const& flag)
 {
     return flag <<= !flag;
 }
@@ -4938,6 +4941,23 @@ simplify_id(Wrapped const& wrapped)
     return simplified_id_wrapper<Wrapped>(wrapped);
 }
 
+// signalize(x) turns x into a signal if it isn't already one.
+// Or, in other words...
+// signalize(s), where s is a signal, returns s.
+// signalize(v), where v is a raw value, returns a value signal carrying s.
+template<class Signal>
+std::enable_if_t<is_readable_signal_type<Signal>::value, Signal>
+signalize(Signal s)
+{
+    return s;
+}
+template<class Value, std::enable_if_t<!is_signal_type<Value>::value, int> = 0>
+auto
+signalize(Value v)
+{
+    return val(std::move(v));
+}
+
 } // namespace alia
 
 
@@ -4989,7 +5009,7 @@ template<
         is_map_like<typename ContainerSignal::value_type>::value,
         int> = 0>
 void
-for_each(Context ctx, ContainerSignal const& container_signal, Fn const& fn)
+for_each(Context ctx, ContainerSignal const& container_signal, Fn&& fn)
 {
     ALIA_IF(is_readable(container_signal))
     {
@@ -5021,7 +5041,7 @@ template<
             && is_vector_like<typename ContainerSignal::value_type>::value,
         int> = 0>
 void
-for_each(Context ctx, ContainerSignal const& container_signal, Fn const& fn)
+for_each(Context ctx, ContainerSignal const& container_signal, Fn&& fn)
 {
     ALIA_IF(is_readable(container_signal))
     {
@@ -5104,7 +5124,7 @@ template<
             && !is_vector_like<typename ContainerSignal::value_type>::value,
         int> = 0>
 void
-for_each(Context ctx, ContainerSignal const& container_signal, Fn const& fn)
+for_each(Context ctx, ContainerSignal const& container_signal, Fn&& fn)
 {
     ALIA_IF(is_readable(container_signal))
     {
@@ -5841,17 +5861,19 @@ make_state_signal(state_holder<Value>& state)
 
 // get_state(ctx, initial_value) returns a signal carrying some persistent local
 // state whose initial value is determined by the :initial_value signal. The
-// returned signal will not be readable until :initial_value is readable (or
-// a value is explicitly written to the state signal).
+// returned signal will not be readable until :initial_value is readable or
+// a value is explicitly written to the state signal.
 template<class Context, class InitialValue>
 auto
 get_state(Context ctx, InitialValue const& initial_value)
 {
-    state_holder<typename InitialValue::value_type>* state;
+    auto initial_value_signal = signalize(initial_value);
+
+    state_holder<typename decltype(initial_value_signal)::value_type>* state;
     get_data(ctx, &state);
 
-    if (!state->is_initialized() && signal_is_readable(initial_value))
-        state->set(read_signal(initial_value));
+    if (!state->is_initialized() && signal_is_readable(initial_value_signal))
+        state->set(read_signal(initial_value_signal));
 
     return make_state_signal(*state);
 }
@@ -5878,7 +5900,7 @@ make_printf_friendly(Value x)
     return x;
 }
 
-static inline char const*
+inline char const*
 make_printf_friendly(std::string const& x)
 {
     return x.c_str();
@@ -5921,6 +5943,153 @@ auto
 printf(context ctx, char const* format, Args const&... args)
 {
     return apply(ctx, ALIA_LAMBDIFY(invoke_snprintf), val(format), args...);
+}
+
+// All conversion of values to and from text goes through the functions
+// from_string and to_string. In order to use a particular value type with
+// the text-based widgets and utilities provided here, that type must
+// implement these functions.
+
+#define ALIA_DECLARE_STRING_CONVERSIONS(T)                                     \
+    void from_string(T* value, std::string const& s);                          \
+    std::string to_string(T value);
+
+// from_string(value, s) should parse the string s and store it in *value.
+// It should throw a validation_error if the string doesn't parse.
+
+// to_string(value) should simply return the string form of value.
+
+// Implementations of from_string and to_string are provided for the following
+// types.
+
+ALIA_DECLARE_STRING_CONVERSIONS(short int)
+ALIA_DECLARE_STRING_CONVERSIONS(unsigned short int)
+ALIA_DECLARE_STRING_CONVERSIONS(int)
+ALIA_DECLARE_STRING_CONVERSIONS(unsigned int)
+ALIA_DECLARE_STRING_CONVERSIONS(long int)
+ALIA_DECLARE_STRING_CONVERSIONS(unsigned long int)
+ALIA_DECLARE_STRING_CONVERSIONS(long long int)
+ALIA_DECLARE_STRING_CONVERSIONS(unsigned long long int)
+ALIA_DECLARE_STRING_CONVERSIONS(float)
+ALIA_DECLARE_STRING_CONVERSIONS(double)
+ALIA_DECLARE_STRING_CONVERSIONS(std::string)
+
+// as_text(ctx, x) creates a text-based interface to the accessor x.
+template<class Readable>
+void
+update_text_conversion(keyed_data<std::string>* data, Readable x)
+{
+    if (signal_is_readable(x))
+    {
+        refresh_keyed_data(*data, x.value_id());
+        if (!is_valid(*data))
+            set(*data, to_string(read_signal(x)));
+    }
+    else
+    {
+        invalidate(*data);
+    }
+}
+template<class Readable>
+keyed_data_signal<std::string>
+as_text(context ctx, Readable x)
+{
+    keyed_data<std::string>* data;
+    get_cached_data(ctx, &data);
+    update_text_conversion(data, x);
+    return keyed_data_signal<std::string>(data);
+}
+
+// as_bidirectional_text(ctx, x) is similar to as_text but it's bidirectional.
+template<class Value>
+struct bidirectional_text_data
+{
+    captured_id input_id;
+    Value input_value;
+    bool output_valid = false;
+    std::string output_text;
+    counter_type output_version = 1;
+};
+template<class Value, class Readable>
+void
+update_bidirectional_text(bidirectional_text_data<Value>* data, Readable x)
+{
+    if (signal_is_readable(x))
+    {
+        auto const& input_id = x.value_id();
+        if (!data->input_id.matches(input_id))
+        {
+            if (!data->output_valid || read_signal(x) != data->input_value)
+            {
+                data->output_text = to_string(read_signal(x));
+                data->output_valid = true;
+                ++data->output_version;
+            }
+            data->input_id.capture(input_id);
+        }
+    }
+    else
+    {
+        data->output_valid = false;
+    }
+}
+template<class Wrapped>
+struct bidirectional_text_signal : signal<
+                                       bidirectional_text_signal<Wrapped>,
+                                       std::string,
+                                       typename Wrapped::direction_tag>
+{
+    bidirectional_text_signal(
+        Wrapped wrapped,
+        bidirectional_text_data<typename Wrapped::value_type>* data)
+        : wrapped_(wrapped), data_(data)
+    {
+    }
+    bool
+    is_readable() const
+    {
+        return data_->output_valid;
+    }
+    std::string const&
+    read() const
+    {
+        return data_->output_text;
+    }
+    id_interface const&
+    value_id() const
+    {
+        id_ = make_id(data_->output_version);
+        return id_;
+    }
+    bool
+    is_writable() const
+    {
+        return wrapped_.is_writable();
+    }
+    void
+    write(std::string const& s) const
+    {
+        data_->output_text = s;
+        ++data_->output_version;
+        typename Wrapped::value_type value;
+        from_string(&value, s);
+        data_->input_value = value;
+        wrapped_.write(value);
+    }
+
+ private:
+    Wrapped wrapped_;
+    bidirectional_text_data<typename Wrapped::value_type>* data_;
+    mutable simple_id<counter_type> id_;
+};
+template<class Signal>
+bidirectional_text_signal<Signal>
+as_bidirectional_text(context ctx, Signal x)
+{
+    bidirectional_text_data<typename Signal::value_type>* data;
+    get_cached_data(ctx, &data);
+    update_bidirectional_text(data, x);
+    return bidirectional_text_signal<Signal>(x, data);
 }
 
 } // namespace alia
@@ -6686,6 +6855,125 @@ eval_curve_at_x(unit_cubic_bezier const& curve, double x, double epsilon)
     auto coeff = compute_curve_coefficients(curve);
 
     return sample_curve_y(coeff, solve_for_t_at_x(coeff, x, epsilon));
+}
+
+} // namespace alia
+
+#include <sstream>
+
+namespace alia {
+
+template<class T>
+bool
+string_to_value(std::string const& str, T* value)
+{
+    std::istringstream s(str);
+    T x;
+    if (!(s >> x))
+        return false;
+    s >> std::ws;
+    if (s.eof())
+    {
+        *value = x;
+        return true;
+    }
+    return false;
+}
+
+template<class T>
+std::string
+value_to_string(T const& value)
+{
+    std::ostringstream s;
+    s << value;
+    return s.str();
+}
+
+template<class T>
+void
+float_from_string(T* value, std::string const& str)
+{
+    if (!string_to_value(str, value))
+        throw validation_error("This input expects a number.");
+}
+
+#define ALIA_FLOAT_CONVERSIONS(T)                                              \
+    void from_string(T* value, std::string const& str)                         \
+    {                                                                          \
+        float_from_string(value, str);                                         \
+    }                                                                          \
+    std::string to_string(T value)                                             \
+    {                                                                          \
+        return value_to_string(value);                                         \
+    }
+
+ALIA_FLOAT_CONVERSIONS(float)
+ALIA_FLOAT_CONVERSIONS(double)
+
+template<class T>
+void
+signed_integer_from_string(T* value, std::string const& str)
+{
+    long long n;
+    if (!string_to_value(str, &n))
+        throw validation_error("This input expects an integer.");
+    T x = T(n);
+    if (x != n)
+        throw validation_error("This integer is outside the supported range.");
+    *value = x;
+}
+
+template<class T>
+void
+unsigned_integer_from_string(T* value, std::string const& str)
+{
+    unsigned long long n;
+    if (!string_to_value(str, &n))
+        throw validation_error("This input expects an integer.");
+    T x = T(n);
+    if (x != n)
+        throw validation_error("This integer is outside the supported range.");
+    *value = x;
+}
+
+#define ALIA_SIGNED_INTEGER_CONVERSIONS(T)                                     \
+    void from_string(T* value, std::string const& str)                         \
+    {                                                                          \
+        signed_integer_from_string(value, str);                                \
+    }                                                                          \
+    std::string to_string(T value)                                             \
+    {                                                                          \
+        return value_to_string(value);                                         \
+    }
+
+#define ALIA_UNSIGNED_INTEGER_CONVERSIONS(T)                                   \
+    void from_string(T* value, std::string const& str)                         \
+    {                                                                          \
+        unsigned_integer_from_string(value, str);                              \
+    }                                                                          \
+    std::string to_string(T value)                                             \
+    {                                                                          \
+        return value_to_string(value);                                         \
+    }
+
+ALIA_SIGNED_INTEGER_CONVERSIONS(short int)
+ALIA_UNSIGNED_INTEGER_CONVERSIONS(unsigned short int)
+ALIA_SIGNED_INTEGER_CONVERSIONS(int)
+ALIA_UNSIGNED_INTEGER_CONVERSIONS(unsigned int)
+ALIA_SIGNED_INTEGER_CONVERSIONS(long int)
+ALIA_UNSIGNED_INTEGER_CONVERSIONS(unsigned long int)
+ALIA_SIGNED_INTEGER_CONVERSIONS(long long int)
+ALIA_UNSIGNED_INTEGER_CONVERSIONS(unsigned long long int)
+
+void
+from_string(std::string* value, std::string const& str)
+{
+    *value = str;
+}
+std::string
+to_string(std::string value)
+{
+    return value;
 }
 
 } // namespace alia
