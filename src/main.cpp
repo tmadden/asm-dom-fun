@@ -98,6 +98,8 @@ ALIA_DECLARE_STRING_CONVERSIONS(unsigned long long int)
 ALIA_DECLARE_STRING_CONVERSIONS(float)
 ALIA_DECLARE_STRING_CONVERSIONS(double)
 
+ALIA_DECLARE_STRING_CONVERSIONS(std::string)
+
 // as_text(ctx, x) creates a text-based interface to the accessor x.
 template<class Readable>
 void
@@ -299,6 +301,17 @@ ALIA_INTEGER_CONVERSIONS(unsigned long int)
 ALIA_INTEGER_CONVERSIONS(long long int)
 ALIA_INTEGER_CONVERSIONS(unsigned long long int)
 
+void
+from_string(string* value, string const& str)
+{
+    *value = str;
+}
+string
+to_string(string value)
+{
+    return std::move(value);
+}
+
 ///////
 
 alia::system the_system;
@@ -331,13 +344,20 @@ void
 refresh();
 
 void
-do_text(dom_context ctx, readable<std::string> text)
+do_text_(dom_context ctx, readable<std::string> text)
 {
     handle_event<refresh_event>(ctx, [text](auto ctx, auto& e) {
         get_component<dom_context_info_tag>(ctx)->current_children->push_back(
             asmdom::h(
                 "p", signal_is_readable(text) ? read_signal(text) : string()));
     });
+}
+
+template<class Signal>
+void
+do_text(dom_context ctx, Signal text)
+{
+    do_text_(ctx, as_text(ctx, text));
 }
 
 struct input_data
@@ -419,6 +439,78 @@ do_number_input_(dom_context ctx, bidirectional<string> value)
             }
         }
     });
+}
+
+void
+do_input_(dom_context ctx, bidirectional<string> value)
+{
+    input_data* data;
+    get_cached_data(ctx, &data);
+
+    if (signal_is_readable(value))
+    {
+        if (!data->external_id.matches(value.value_id()))
+        {
+            data->value = read_signal(value);
+            data->external_id.capture(value.value_id());
+        }
+    }
+    else
+    {
+        if (!data->external_id.matches(no_id))
+        {
+            data->value = string();
+            data->external_id.capture(no_id);
+        }
+    }
+
+    auto id = get_node_id(ctx);
+    auto route = get_active_routing_region(ctx);
+
+    handle_event<refresh_event>(ctx, [=](auto ctx, auto& e) {
+        get_component<dom_context_info_tag>(ctx)->current_children->push_back(
+            asmdom::h(
+                "input",
+                asmdom::Data(
+                    asmdom::Props{{"value", emscripten::val(data->value)}},
+                    asmdom::Callbacks{
+                        {"oninput", [=](emscripten::val e) {
+                             auto start = std::chrono::system_clock::now();
+
+                             value_update_event update;
+                             update.id = id;
+                             update.value
+                                 = e["target"]["value"].as<std::string>();
+                             dispatch_targeted_event(the_system, update, route);
+                             refresh();
+
+                             auto end = std::chrono::system_clock::now();
+
+                             std::chrono::duration<double> elapsed_seconds
+                                 = end - start;
+
+                             return true;
+                         }}})));
+    });
+    handle_event<value_update_event>(ctx, [=](auto ctx, auto& e) {
+        {
+            if (e.id == id)
+            {
+                if (signal_is_writable(value))
+                {
+                    write_signal(value, e.value);
+                }
+                data->value = e.value;
+            }
+        }
+    });
+}
+
+template<class Signal>
+void
+do_input(dom_context ctx, Signal signal)
+{
+    do_input_(ctx, as_bidirectional_text(ctx, signal));
 }
 
 template<class Signal>
@@ -519,6 +611,29 @@ do_colored_box(dom_context ctx, readable<rgb8> color)
 }
 
 void
+do_addition_ui(
+    dom_context ctx, bidirectional<double> a, bidirectional<double> b)
+{
+    do_input(ctx, a);
+    do_input(ctx, b);
+    do_text(ctx, a + b);
+}
+
+void
+do_greeting_ui(dom_context ctx, bidirectional<string> name)
+{
+    // Allow the user to input their name.
+    do_input(ctx, name);
+
+    // Greet the user.
+    alia_if(name != "")
+    {
+        do_text(ctx, "Hello, " + name + "!");
+    }
+    alia_end
+}
+
+void
 do_ui(context vanilla_ctx)
 {
     // std::cout << "ticks: " << get_millisecond_counter() << std::endl;
@@ -526,18 +641,43 @@ do_ui(context vanilla_ctx)
     dom_context ctx
         = add_component<dom_context_info_tag>(vanilla_ctx, &the_context_info);
 
+    do_addition_ui(
+        ctx, get_state(ctx, empty<double>()), get_state(ctx, empty<double>()));
+
+    // auto x = get_state(ctx, val(4));
+    // do_text(
+    //     ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), smooth_value(ctx,
+    //     x)));
+    // do_number_input(ctx, x);
+    // do_button(ctx, "reset"_a, x <<= val(4));
+
+    ///
+
+    ///
+
+    // auto length = apply(ctx, alia_method(length), name);
+    // alia_if(length > 10)
+    // {
+    //     do_text(ctx, "That's a long name!"_a);
+    // }
+    // alia_end
+
     // do_text(
     //     ctx,
     //     apply(
     //         ctx, ALIA_LAMBDIFY(std::to_string),
     //         get_animation_tick_count(ctx)));
 
-    auto color = get_state(ctx, value(rgb8(0, 0, 0)));
+    ////
 
-    do_button(ctx, "black"_a, color <<= value(rgb8(50, 50, 55)));
-    do_button(ctx, "white"_a, color <<= value(rgb8(230, 230, 255)));
+    // auto color = get_state(ctx, val(rgb8(0, 0, 0)));
 
-    do_colored_box(ctx, smooth_value(ctx, color));
+    // do_button(ctx, "black"_a, color <<= val(rgb8(50, 50, 55)));
+    // do_button(ctx, "white"_a, color <<= val(rgb8(230, 230, 255)));
+
+    // do_colored_box(ctx, smooth_value(ctx, color));
+
+    ////
 
     // animation_timer timer(ctx);
     // ALIA_IF(timer.is_active())
@@ -549,15 +689,15 @@ do_ui(context vanilla_ctx)
     // ALIA_ELSE
     // {
     //     do_button(ctx, "start"_a,
-    //     timer.start(value(millisecond_count(1000))));
+    //     timer.start(val(millisecond_count(1000))));
     // }
     // ALIA_END
 
     // auto color = lift(ctx, interpolate)(
-    //     value(rgb8(230, 230, 255)),
-    //     value(rgb8(40, 40, 160)),
+    //     val(rgb8(230, 230, 255)),
+    //     val(rgb8(40, 40, 160)),
     //     lazy_lift(ALIA_LAMBDIFY(abs))(lazy_lift(ALIA_LAMBDIFY(sin))(
-    //         get_animation_tick_count(ctx) / value(1000.))));
+    //         get_animation_tick_count(ctx) / val(1000.))));
     // do_colored_box(ctx, color);
 
     // do_text(
@@ -565,20 +705,23 @@ do_ui(context vanilla_ctx)
     //     apply(
     //         ctx,
     //         ALIA_LAMBDIFY(std::to_string),
-    //         value(get_millisecond_counter())));
+    //         val(get_millisecond_counter())));
 
-    // do_button(ctx, "red"_a, color <<= value(rgb8(128, 64, 64)));
+    // do_button(ctx, "red"_a, color <<= val(rgb8(128, 64, 64)));
 
-    // auto n = get_state(ctx, value(7));
+    // auto n = get_state(ctx, val(7));
     // do_text(ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), n));
     // do_button(ctx, "increase"_a, ++n);
     // do_button(ctx, "decrease"_a, --n);
 
-    auto x = get_state(ctx, value(4));
-    do_text(
-        ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), smooth_value(ctx, x)));
-    do_number_input(ctx, x);
-    do_button(ctx, "reset"_a, x <<= value(4));
+    ///
+
+    // auto x = get_state(ctx, val(4));
+    // do_text(
+    //     ctx, apply(ctx, ALIA_LAMBDIFY(std::to_string), smooth_value(ctx,
+    //     x)));
+    // do_number_input(ctx, x);
+    // do_button(ctx, "reset"_a, x <<= val(4));
 }
 
 void
@@ -586,7 +729,7 @@ do_tip_calculator(dom_context ctx)
 {
     // Get the state we need.
     auto bill = get_state(ctx, empty<double>()); // defaults to uninitialized
-    auto tip_percentage = get_state(ctx, value(20.)); // defaults to 20%
+    auto tip_percentage = get_state(ctx, val(20.)); // defaults to 20%
 
     // if (signal_is_readable(bill))
     // {
@@ -612,7 +755,7 @@ do_tip_calculator(dom_context ctx)
     do_number_input(ctx, tip_percentage);
 
     // Do some reactive calculations.
-    auto tip = bill * tip_percentage / value(100.);
+    auto tip = bill * tip_percentage / 100;
     auto total = bill + tip;
 
     // Show the results.
@@ -620,9 +763,9 @@ do_tip_calculator(dom_context ctx)
     do_text(ctx, printf(ctx, "total: %.2f", total));
 
     // Allow the user to split the bill.
-    auto n_people = get_state(ctx, value(1.));
+    auto n_people = get_state(ctx, val(1.));
     do_number_input(ctx, n_people);
-    alia_if(n_people > value(1))
+    alia_if(n_people > val(1))
     {
         do_text(ctx, printf(ctx, "tip per person: %.2f", tip / n_people));
         do_text(ctx, printf(ctx, "total per person: %.2f", total / n_people));

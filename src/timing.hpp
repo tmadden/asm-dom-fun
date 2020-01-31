@@ -32,7 +32,7 @@ get_raw_animation_tick_count(dataless_context ctx);
 static inline auto
 get_animation_tick_count(dataless_context ctx)
 {
-    return value(get_raw_animation_tick_count(ctx));
+    return val(get_raw_animation_tick_count(ctx));
 }
 
 // Get the number of ticks remaining until the given end time.
@@ -97,15 +97,6 @@ struct raw_animation_timer
     millisecond_count ticks_left_;
 };
 
-template<class Function, class... Args>
-auto
-make_parameterized_action(Function f, Args... args)
-{
-    return lambda_action(
-        [=]() { return signals_all_readable(args...); },
-        [=]() { return f(read_signal(args)...); });
-}
-
 struct animation_timer
 {
     animation_timer(context ctx) : raw_(ctx)
@@ -118,17 +109,17 @@ struct animation_timer
     auto
     is_active() const
     {
-        return value(raw_.is_active());
+        return val(raw_.is_active());
     }
     auto
     ticks_left() const
     {
-        return value(raw_.ticks_left());
+        return val(raw_.ticks_left());
     }
     auto
     start(readable<millisecond_count> duration)
     {
-        return make_parameterized_action(
+        return parameterized_action(
             [&](millisecond_count duration) { raw_.start(duration); },
             duration);
     }

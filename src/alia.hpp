@@ -2559,7 +2559,7 @@ empty()
     return empty_signal<Value>();
 }
 
-// value(v) creates a read-only signal that carries the value v.
+// val(v) creates a read-only signal that carries the value v.
 template<class Value>
 struct value_signal
     : regular_signal<value_signal<Value>, Value, read_only_signal>
@@ -2583,12 +2583,12 @@ struct value_signal
 };
 template<class Value>
 value_signal<Value>
-value(Value const& v)
+val(Value const& v)
 {
     return value_signal<Value>(v);
 }
 
-// This is a special overload of value() for C-style string literals.
+// This is a special overload of val() for C-style string literals.
 struct string_literal_signal
     : signal<string_literal_signal, std::string, read_only_signal>
 {
@@ -2616,7 +2616,7 @@ struct string_literal_signal
     lazy_reader<std::string> lazy_reader_;
 };
 inline string_literal_signal
-value(char const* text)
+val(char const* text)
 {
     return string_literal_signal(text);
 }
@@ -2626,11 +2626,11 @@ namespace literals {
 inline value_signal<unsigned long long int>
 operator"" _a(unsigned long long int n)
 {
-    return value(n);
+    return val(n);
 }
 inline value_signal<long double> operator"" _a(long double n)
 {
-    return value(n);
+    return val(n);
 }
 inline string_literal_signal operator"" _a(char const* s, size_t n)
 {
@@ -3586,6 +3586,51 @@ ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(>=)
 
 #undef ALIA_DEFINE_BINARY_SIGNAL_OPERATOR
 
+#ifndef ALIA_STRICT_OPERATORS
+
+#define ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(op)                         \
+    template<                                                                  \
+        class A,                                                               \
+        class B,                                                               \
+        std::enable_if_t<                                                      \
+            is_signal_type<A>::value && !is_signal_type<B>::value,             \
+            int> = 0>                                                          \
+    auto operator op(A const& a, B const& b)                                   \
+    {                                                                          \
+        return lazy_apply([](auto a, auto b) { return a op b; }, a, val(b)); \
+    }                                                                          \
+    template<                                                                  \
+        class A,                                                               \
+        class B,                                                               \
+        std::enable_if_t<                                                      \
+            !is_signal_type<A>::value && is_signal_type<B>::value,             \
+            int> = 0>                                                          \
+    auto operator op(A const& a, B const& b)                                   \
+    {                                                                          \
+        return lazy_apply([](auto a, auto b) { return a op b; }, val(a), b); \
+    }
+
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(+)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(-)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(*)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(/)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR (^)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(%)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(&)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(|)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(<<)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(>>)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(==)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(!=)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(<)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(<=)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(>)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(>=)
+
+#undef ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR
+
+#endif
+
 #define ALIA_DEFINE_UNARY_SIGNAL_OPERATOR(op)                                  \
     template<class A, std::enable_if_t<is_signal_type<A>::value, int> = 0>     \
     auto operator op(A const& a)                                               \
@@ -3643,14 +3688,40 @@ template<
     class A,
     class B,
     std::enable_if_t<
-        std::is_base_of<untyped_signal_base, A>::value
-            && std::is_base_of<untyped_signal_base, B>::value,
+        is_signal_type<A>::value && is_signal_type<B>::value,
         int> = 0>
 auto
 operator||(A const& a, B const& b)
 {
     return logical_or_signal<A, B>(a, b);
 }
+
+#ifndef ALIA_STRICT_OPERATORS
+
+template<
+    class A,
+    class B,
+    std::enable_if_t<
+        is_signal_type<A>::value && !is_signal_type<B>::value,
+        int> = 0>
+auto
+operator||(A const& a, B const& b)
+{
+    return a || val(b);
+}
+template<
+    class A,
+    class B,
+    std::enable_if_t<
+        !is_signal_type<A>::value && is_signal_type<B>::value,
+        int> = 0>
+auto
+operator||(A const& a, B const& b)
+{
+    return val(a) || b;
+}
+
+#endif
 
 template<class Arg0, class Arg1>
 struct logical_and_signal
@@ -3695,14 +3766,40 @@ template<
     class A,
     class B,
     std::enable_if_t<
-        std::is_base_of<untyped_signal_base, A>::value
-            && std::is_base_of<untyped_signal_base, B>::value,
+        is_signal_type<A>::value && is_signal_type<B>::value,
         int> = 0>
 auto
 operator&&(A const& a, B const& b)
 {
     return logical_and_signal<A, B>(a, b);
 }
+
+#ifndef ALIA_STRICT_OPERATORS
+
+template<
+    class A,
+    class B,
+    std::enable_if_t<
+        is_signal_type<A>::value && !is_signal_type<B>::value,
+        int> = 0>
+auto
+operator&&(A const& a, B const& b)
+{
+    return a && val(b);
+}
+template<
+    class A,
+    class B,
+    std::enable_if_t<
+        !is_signal_type<A>::value && is_signal_type<B>::value,
+        int> = 0>
+auto
+operator&&(A const& a, B const& b)
+{
+    return val(a) && b;
+}
+
+#endif
 
 // This is the equivalent of the ternary operator (or std::conditional) for
 // signals.
@@ -4273,6 +4370,22 @@ operator<<=(Sink const& sink, Source const& source)
     return copy_action<Sink, Source>(sink, source);
 }
 
+#ifndef ALIA_STRICT_OPERATORS
+
+template<
+    class Sink,
+    class Source,
+    std::enable_if_t<
+        is_writable_signal_type<Sink>::value && !is_signal_type<Source>::value,
+        int> = 0>
+auto
+operator<<=(Sink const& sink, Source const& source)
+{
+    return sink <<= val(source);
+}
+
+#endif
+
 // For most compound assignment operators (e.g., +=), a += b, where :a and :b
 // are signals, creates an action that sets :a equal to :a + :b.
 
@@ -4300,6 +4413,33 @@ ALIA_DEFINE_COMPOUND_ASSIGNMENT_OPERATOR(|=, |)
 
 #undef ALIA_DEFINE_COMPOUND_ASSIGNMENT_OPERATOR
 
+#ifndef ALIA_STRICT_OPERATORS
+
+#define ALIA_DEFINE_LIBERAL_COMPOUND_ASSIGNMENT_OPERATOR(                      \
+    assignment_form, normal_form)                                              \
+    template<                                                                  \
+        class A,                                                               \
+        class B,                                                               \
+        std::enable_if_t<                                                      \
+            is_bidirectional_signal_type<A>::value                             \
+                && !is_signal_type<B>::value,                                  \
+            int> = 0>                                                          \
+    auto operator assignment_form(A const& a, B const& b)                      \
+    {                                                                          \
+        return a <<= (a normal_form val(b));                                 \
+    }
+
+ALIA_DEFINE_LIBERAL_COMPOUND_ASSIGNMENT_OPERATOR(+=, +)
+ALIA_DEFINE_LIBERAL_COMPOUND_ASSIGNMENT_OPERATOR(-=, -)
+ALIA_DEFINE_LIBERAL_COMPOUND_ASSIGNMENT_OPERATOR(*=, *)
+ALIA_DEFINE_LIBERAL_COMPOUND_ASSIGNMENT_OPERATOR(/=, /)
+ALIA_DEFINE_LIBERAL_COMPOUND_ASSIGNMENT_OPERATOR(^=, ^)
+ALIA_DEFINE_LIBERAL_COMPOUND_ASSIGNMENT_OPERATOR(%=, %)
+ALIA_DEFINE_LIBERAL_COMPOUND_ASSIGNMENT_OPERATOR(&=, &)
+ALIA_DEFINE_LIBERAL_COMPOUND_ASSIGNMENT_OPERATOR(|=, |)
+
+#endif
+
 // The increment and decrement operators work similarly.
 
 #define ALIA_DEFINE_BY_ONE_OPERATOR(assignment_form, normal_form)              \
@@ -4308,14 +4448,14 @@ ALIA_DEFINE_COMPOUND_ASSIGNMENT_OPERATOR(|=, |)
         std::enable_if_t<is_bidirectional_signal_type<A>::value, int> = 0>     \
     auto operator assignment_form(A const& a)                                  \
     {                                                                          \
-        return a <<= (a normal_form value(typename A::value_type(1)));         \
+        return a <<= (a normal_form val(typename A::value_type(1)));         \
     }                                                                          \
     template<                                                                  \
         class A,                                                               \
         std::enable_if_t<is_bidirectional_signal_type<A>::value, int> = 0>     \
     auto operator assignment_form(A const& a, int)                             \
     {                                                                          \
-        return a <<= (a normal_form value(typename A::value_type(1)));         \
+        return a <<= (a normal_form val(typename A::value_type(1)));         \
     }
 
 ALIA_DEFINE_BY_ONE_OPERATOR(++, +)
@@ -4446,6 +4586,20 @@ inline bool
 always_ready()
 {
     return true;
+}
+
+// parameterized_action(f, args...) is used to construct actions that require
+// parameters that are represented as signals. :args should all be signals. The
+// action won't be considered ready until all signals are readable. f() is the
+// function that performs the action. Its arguments are the values read from the
+// argument signals.
+template<class Function, class... Args>
+auto
+parameterized_action(Function f, Args... args)
+{
+    return lambda_action(
+        [=]() { return signals_all_readable(args...); },
+        [=]() { return f(read_signal(args)...); });
 }
 
 } // namespace alia
@@ -4882,7 +5036,7 @@ for_each(Context ctx, ContainerSignal const& container_signal, Fn const& fn)
                 nb.begin(nc, iteration_id);
             else
                 nb.begin(nc, make_id(index));
-            fn(ctx, container_signal[value(index)]);
+            fn(ctx, container_signal[val(index)]);
         }
     }
     ALIA_END
@@ -5766,7 +5920,7 @@ template<class... Args>
 auto
 printf(context ctx, char const* format, Args const&... args)
 {
-    return apply(ctx, ALIA_LAMBDIFY(invoke_snprintf), value(format), args...);
+    return apply(ctx, ALIA_LAMBDIFY(invoke_snprintf), val(format), args...);
 }
 
 } // namespace alia
