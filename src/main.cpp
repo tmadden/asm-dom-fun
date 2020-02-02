@@ -314,27 +314,11 @@ do_tip_calculator(dom_context ctx)
 //     refresh();
 // }
 
-void
-refresh_for_emscripten(void*)
-{
-    refresh_system(the_system);
-}
-
-struct dom_external_interface : external_interface
-{
-    void
-    request_animation_refresh()
-    {
-        emscripten_async_call(refresh_for_emscripten, 0, -1);
-    }
-};
-
-dom_external_interface the_interface;
-
 int
 main()
 {
-    the_system.external = &the_interface;
+    the_system.external = &the_dom.external;
+    the_dom.external.system = &the_system;
     the_system.controller = std::ref(the_dom);
     the_dom.controller = do_ui;
 

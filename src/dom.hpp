@@ -71,11 +71,21 @@ do_button(dom_context ctx, readable<std::string> text, action<> on_click);
 void
 do_colored_box(dom_context ctx, readable<rgb8> color);
 
+struct dom_external_interface : alia::external_interface
+{
+    alia::system* system;
+
+    void
+    request_animation_refresh();
+};
+
 struct dom_system
 {
+    std::function<void(dom_context)> controller;
+
     asmdom::VNode* current_view = nullptr;
 
-    std::function<void(dom_context)> controller;
+    dom_external_interface external;
 
     void
     operator()(alia::context ctx);

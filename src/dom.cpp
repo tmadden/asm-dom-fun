@@ -191,6 +191,18 @@ handle_refresh_event(dom_context ctx, dom_system& system)
 }
 
 void
+refresh_for_emscripten(void* system)
+{
+    refresh_system(*reinterpret_cast<alia::system*>(system));
+}
+
+void
+dom_external_interface::request_animation_refresh()
+{
+    emscripten_async_call(refresh_for_emscripten, this->system, -1);
+}
+
+void
 dom_system::operator()(alia::context vanilla_ctx)
 {
     dom_context_info* context_info;
