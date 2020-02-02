@@ -20,11 +20,6 @@ ALIA_DEFINE_COMPONENT_TYPE(dom_context_info_tag, dom_context_info*)
 typedef alia::add_component_type_t<alia::context, dom_context_info_tag>
     dom_context;
 
-struct dom_system
-{
-    asmdom::VNode* current_view = nullptr;
-};
-
 struct click_event : targeted_event
 {
 };
@@ -76,11 +71,11 @@ do_button(dom_context ctx, readable<std::string> text, action<> on_click);
 void
 do_colored_box(dom_context ctx, readable<rgb8> color);
 
-struct controller_wrapper
+struct dom_system
 {
-    dom_system system;
+    asmdom::VNode* current_view = nullptr;
 
-    std::function<void(dom_context)> wrapped;
+    std::function<void(dom_context)> controller;
 
     void
     operator()(alia::context ctx);

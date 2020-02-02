@@ -1,15 +1,34 @@
 #include "timing.hpp"
 #include "nodes.hpp"
 
+#include <emscripten/emscripten.h>
+
 extern alia::millisecond_count the_millisecond_tick_count;
+
+void
+refresh();
+
+static bool refresh_requested = false;
+
+void
+refresh(void*)
+{
+    refresh_requested = false;
+    refresh();
+}
 
 namespace alia {
 
 void
 request_animation_refresh(dataless_context ctx)
 {
-    // invoke virtual method on system interface
-    // (Also set a flag indicating that a refresh is needed.)
+    if (!refresh_requested)
+    {
+        emscripten_async_call(refresh, 0, -1);
+        refresh_requested = true;
+        // invoke virtual method on system interface
+        // (Also set a flag indicating that a refresh is needed.)
+    }
 }
 
 millisecond_count

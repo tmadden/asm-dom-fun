@@ -181,28 +181,13 @@ do_colored_box(dom_context ctx, readable<rgb8> color)
     });
 }
 
-static millisecond_count
-get_millisecond_tick_count()
+static void
+handle_refresh_event(dom_context ctx, dom_system& system)
 {
-    static auto start = std::chrono::steady_clock::now();
-    auto now = std::chrono::steady_clock::now();
-    return std::chrono::duration_cast<
-               std::chrono::duration<millisecond_count, std::milli>>(
-               now - start)
-        .count();
-}
-
-template<class Controller>
-void
-handle_refresh_event(
-    dom_context ctx, dom_system& system, Controller const& controller)
-{
-    // system.millisecond_tick_count = get_millisecond_tick_count();
-
     asmdom::Children children;
     get_component<dom_context_info_tag>(ctx)->current_children = &children;
 
-    controller(ctx);
+    system.controller(ctx);
 
     asmdom::VNode* root = asmdom::h(
         "div", asmdom::Data(asmdom::Attrs{{"class", "container"}}), children);
@@ -212,7 +197,7 @@ handle_refresh_event(
 }
 
 void
-controller_wrapper::operator()(alia::context vanilla_ctx)
+dom_system::operator()(alia::context vanilla_ctx)
 {
     dom_context_info* context_info;
     get_data(vanilla_ctx, &context_info);
@@ -221,11 +206,11 @@ controller_wrapper::operator()(alia::context vanilla_ctx)
 
     if (is_refresh_event(ctx))
     {
-        handle_refresh_event(ctx, this->system, this->wrapped);
+        handle_refresh_event(ctx, *this);
     }
     else
     {
-        this->wrapped(ctx);
+        this->controller(ctx);
     }
 }
 

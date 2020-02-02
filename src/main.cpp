@@ -64,11 +64,15 @@ using namespace dom;
 
 alia::system the_system;
 
-dom::controller_wrapper the_dom;
+dom::dom_system the_dom;
 
 void
 refresh()
 {
+    static int counter = 0;
+    ++counter;
+    std::cout << "refresh #" << counter << std::endl;
+
     the_millisecond_tick_count = get_millisecond_tick_count();
 
     refresh_event event;
@@ -131,10 +135,11 @@ do_ui(dom_context ctx)
     // }
     // alia_end
 
-    do_text(
-        ctx,
-        apply(
-            ctx, ALIA_LAMBDIFY(std::to_string), get_animation_tick_count(ctx)));
+    // do_text(
+    //     ctx,
+    //     apply(
+    //         ctx, ALIA_LAMBDIFY(std::to_string),
+    //         get_animation_tick_count(ctx)));
 
     ////
 
@@ -359,9 +364,7 @@ int
 main()
 {
     the_system.controller = std::ref(the_dom);
-    the_dom.wrapped = do_ui;
-
-    emscripten_set_main_loop(refresh, 0, 0);
+    the_dom.controller = do_ui;
 
     // Initialize asm-dom.
     asmdom::Config config = asmdom::Config();
@@ -371,8 +374,8 @@ main()
     emscripten::val document = emscripten::val::global("document");
     emscripten::val root
         = document.call<emscripten::val>("getElementById", std::string("root"));
-    the_dom.system.current_view = asmdom::h("div", std::string(""));
-    asmdom::patch(root, the_dom.system.current_view);
+    the_dom.current_view = asmdom::h("div", std::string(""));
+    asmdom::patch(root, the_dom.current_view);
 
     // // Fetch some data.
     // emscripten_fetch_attr_t attr;

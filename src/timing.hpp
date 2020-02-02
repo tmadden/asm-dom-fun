@@ -1,12 +1,12 @@
-#ifndef ALIA_UI_UTILITIES_TIMING_HPP
-#define ALIA_UI_UTILITIES_TIMING_HPP
+#ifndef ALIA_SIGNALS_TEMPORAL_HPP
+#define ALIA_SIGNALS_TEMPORAL_HPP
 
 #include "alia.hpp"
 #include <queue>
 
 #include "nodes.hpp"
 
-// This file provides various utilities for working with time in alia.
+// This file provides various signals and adaptors that work with time.
 
 namespace alia {
 
