@@ -20,6 +20,7 @@
 #include "alia.hpp"
 
 #include "color.hpp"
+#include "dom.hpp"
 #include "timing.hpp"
 
 using std::string;
@@ -59,301 +60,22 @@ struct timing_interface
 
 ///////
 
+using namespace dom;
+
 alia::system the_system;
 
-asmdom::VNode* current_view = nullptr;
-
-struct dom_context_info
-{
-    asmdom::Children* current_children;
-};
-ALIA_DEFINE_COMPONENT_TYPE(dom_context_info_tag, dom_context_info*)
-
-dom_context_info the_context_info;
-
-typedef alia::add_component_type_t<alia::context, dom_context_info_tag>
-    dom_context;
-
-struct click_event
-{
-    node_id id;
-};
-
-struct value_update_event
-{
-    node_id id;
-    string value;
-};
-
-void
-refresh();
-
-void
-do_text_(dom_context ctx, readable<std::string> text)
-{
-    handle_event<refresh_event>(ctx, [text](auto ctx, auto& e) {
-        get_component<dom_context_info_tag>(ctx)->current_children->push_back(
-            asmdom::h(
-                "p", signal_is_readable(text) ? read_signal(text) : string()));
-    });
-}
-
-template<class Signal>
-void
-do_text(dom_context ctx, Signal text)
-{
-    do_text_(ctx, as_text(ctx, text));
-}
-
-struct input_data
-{
-    captured_id external_id;
-    string value;
-};
-
-void
-do_number_input_(dom_context ctx, bidirectional<string> value)
-{
-    input_data* data;
-    get_cached_data(ctx, &data);
-
-    if (signal_is_readable(value))
-    {
-        if (!data->external_id.matches(value.value_id()))
-        {
-            data->value = read_signal(value);
-            data->external_id.capture(value.value_id());
-        }
-    }
-    else
-    {
-        if (!data->external_id.matches(no_id))
-        {
-            data->value = string();
-            data->external_id.capture(no_id);
-        }
-    }
-
-    auto id = get_node_id(ctx);
-    auto route = get_active_routing_region(ctx);
-
-    handle_event<refresh_event>(ctx, [=](auto ctx, auto& e) {
-        get_component<dom_context_info_tag>(ctx)->current_children->push_back(
-            asmdom::h(
-                "input",
-                asmdom::Data(
-                    asmdom::Attrs{{"type", "number"}},
-                    asmdom::Props{{"value", emscripten::val(data->value)}},
-                    asmdom::Callbacks{
-                        {"oninput", [=](emscripten::val e) {
-                             auto start = std::chrono::system_clock::now();
-
-                             value_update_event update;
-                             update.id = id;
-                             update.value
-                                 = e["target"]["value"].as<std::string>();
-                             dispatch_targeted_event(the_system, update, route);
-                             refresh();
-
-                             //  std::cout << update.value << std::endl;
-
-                             auto end = std::chrono::system_clock::now();
-
-                             std::chrono::duration<double> elapsed_seconds
-                                 = end - start;
-                             //  std::cout
-                             //      << "elapsed time: " <<
-                             //      elapsed_seconds.count()
-                             //      << "s\n";
-
-                             return true;
-                         }}})));
-    });
-    handle_event<value_update_event>(ctx, [=](auto ctx, auto& e) {
-        {
-            // std::cout << "UPDATE!: " << e.value << std::endl;
-            if (e.id == id)
-            {
-                // std::cout << "ID matched" << std::endl;
-                if (signal_is_writable(value))
-                {
-                    // std::cout << "signal writable" << std::endl;
-                    write_signal(value, e.value);
-                }
-                data->value = e.value;
-            }
-        }
-    });
-}
-
-void
-do_input_(dom_context ctx, bidirectional<string> value)
-{
-    input_data* data;
-    get_cached_data(ctx, &data);
-
-    if (signal_is_readable(value))
-    {
-        if (!data->external_id.matches(value.value_id()))
-        {
-            data->value = read_signal(value);
-            data->external_id.capture(value.value_id());
-        }
-    }
-    else
-    {
-        if (!data->external_id.matches(no_id))
-        {
-            data->value = string();
-            data->external_id.capture(no_id);
-        }
-    }
-
-    auto id = get_node_id(ctx);
-    auto route = get_active_routing_region(ctx);
-
-    handle_event<refresh_event>(ctx, [=](auto ctx, auto& e) {
-        get_component<dom_context_info_tag>(ctx)->current_children->push_back(
-            asmdom::h(
-                "input",
-                asmdom::Data(
-                    asmdom::Props{{"value", emscripten::val(data->value)}},
-                    asmdom::Callbacks{
-                        {"oninput", [=](emscripten::val e) {
-                             auto start = std::chrono::system_clock::now();
-
-                             value_update_event update;
-                             update.id = id;
-                             update.value
-                                 = e["target"]["value"].as<std::string>();
-                             dispatch_targeted_event(the_system, update, route);
-                             refresh();
-
-                             auto end = std::chrono::system_clock::now();
-
-                             std::chrono::duration<double> elapsed_seconds
-                                 = end - start;
-
-                             return true;
-                         }}})));
-    });
-    handle_event<value_update_event>(ctx, [=](auto ctx, auto& e) {
-        {
-            if (e.id == id)
-            {
-                if (signal_is_writable(value))
-                {
-                    write_signal(value, e.value);
-                }
-                data->value = e.value;
-            }
-        }
-    });
-}
-
-template<class Signal>
-void
-do_input(dom_context ctx, Signal signal)
-{
-    do_input_(ctx, as_bidirectional_text(ctx, signal));
-}
-
-template<class Signal>
-void
-do_number_input(dom_context ctx, Signal value)
-{
-    do_number_input_(ctx, as_bidirectional_text(ctx, value));
-}
-
-void
-do_button(dom_context ctx, readable<std::string> text, action<> on_click)
-{
-    auto id = get_node_id(ctx);
-    auto route = get_active_routing_region(ctx);
-    handle_event<refresh_event>(ctx, [=](auto ctx, auto& e) {
-        if (signal_is_readable(text))
-        {
-            get_component<dom_context_info_tag>(ctx)
-                ->current_children->push_back(asmdom::h(
-                    "button",
-                    asmdom::Data(
-                        asmdom::Attrs{{"class", "btn btn-primary mr-1"}},
-                        asmdom::Callbacks{
-                            {"onclick",
-                             [=](emscripten::val) {
-                                 auto start = std::chrono::system_clock::now();
-
-                                 click_event click;
-                                 click.id = id;
-                                 dispatch_targeted_event(
-                                     the_system, click, route);
-                                 refresh();
-
-                                 auto end = std::chrono::system_clock::now();
-
-                                 std::chrono::duration<double> elapsed_seconds
-                                     = end - start;
-                                 //  std::cout << "elapsed time: "
-                                 //            << elapsed_seconds.count() <<
-                                 //            "s\n";
-
-                                 return true;
-                             }}}),
-                    read_signal(text)));
-        }
-    });
-    handle_event<click_event>(ctx, [=](auto ctx, auto& e) {
-        {
-            if (e.id == id && action_is_ready(on_click))
-            {
-                perform_action(on_click);
-            }
-        }
-    });
-}
+dom::controller_wrapper the_dom;
 
 void
 refresh()
 {
     the_millisecond_tick_count = get_millisecond_tick_count();
 
-    asmdom::Children children;
-    the_context_info.current_children = &children;
-
     refresh_event event;
     dispatch_event(the_system, event);
-
-    // std::cout << children.size() << std::endl;
-
-    asmdom::VNode* root = asmdom::h(
-        "div", asmdom::Data(asmdom::Attrs{{"class", "container"}}), children);
-
-    asmdom::patch(current_view, root);
-    current_view = root;
 }
 
 //////
-
-std::vector<std::string> actions;
-
-void
-do_colored_box(dom_context ctx, readable<rgb8> color)
-{
-    handle_event<refresh_event>(ctx, [color](auto ctx, auto& e) {
-        char style[64] = {'\0'};
-        if (signal_is_readable(color))
-        {
-            rgb8 const& c = read_signal(color);
-            sprintf(style, "background-color: #%02x%02x%02x", c.r, c.g, c.b);
-        }
-        std::cout << style << std::endl;
-        get_component<dom_context_info_tag>(ctx)->current_children->push_back(
-            asmdom::h(
-                "div",
-                asmdom::Data(asmdom::Attrs{{"class", "colored-box"},
-                                           {"style", style}})));
-    });
-}
 
 void
 do_addition_ui(
@@ -379,15 +101,17 @@ do_greeting_ui(dom_context ctx, bidirectional<string> name)
 }
 
 void
-do_ui(context vanilla_ctx)
+do_ui(dom_context ctx)
 {
     // std::cout << "ticks: " << get_millisecond_counter() << std::endl;
 
-    dom_context ctx
-        = add_component<dom_context_info_tag>(vanilla_ctx, &the_context_info);
+    // dom_context ctx
+    //     = add_component<dom_context_info_tag>(vanilla_ctx,
+    //     &the_context_info);
 
-    do_addition_ui(
-        ctx, get_state(ctx, empty<double>()), get_state(ctx, empty<double>()));
+    // do_addition_ui(
+    //     ctx, get_state(ctx, empty<double>()), get_state(ctx,
+    //     empty<double>()));
 
     // auto x = get_state(ctx, val(4));
     // do_text(
@@ -407,20 +131,19 @@ do_ui(context vanilla_ctx)
     // }
     // alia_end
 
-    // do_text(
-    //     ctx,
-    //     apply(
-    //         ctx, ALIA_LAMBDIFY(std::to_string),
-    //         get_animation_tick_count(ctx)));
+    do_text(
+        ctx,
+        apply(
+            ctx, ALIA_LAMBDIFY(std::to_string), get_animation_tick_count(ctx)));
 
     ////
 
-    // auto color = get_state(ctx, val(rgb8(0, 0, 0)));
+    auto color = get_state(ctx, val(rgb8(0, 0, 0)));
 
-    // do_button(ctx, "black"_a, color <<= val(rgb8(50, 50, 55)));
-    // do_button(ctx, "white"_a, color <<= val(rgb8(230, 230, 255)));
+    do_button(ctx, "black"_a, color <<= val(rgb8(50, 50, 55)));
+    do_button(ctx, "white"_a, color <<= val(rgb8(230, 230, 255)));
 
-    // do_colored_box(ctx, smooth_value(ctx, color));
+    do_colored_box(ctx, smooth_value(ctx, color));
 
     ////
 
@@ -615,27 +338,28 @@ do_tip_calculator(dom_context ctx)
 //     // current_view = new_node;
 // }
 
-static void
-download_succeeded(emscripten_fetch_t* fetch)
-{
-    actions.push_back("download succeeded");
-    actions.push_back(std::string(fetch->data, fetch->numBytes));
-    emscripten_fetch_close(fetch); // Free data associated with the fetch.
-    refresh();
-}
+// static void
+// download_succeeded(emscripten_fetch_t* fetch)
+// {
+//     actions.push_back("download succeeded");
+//     actions.push_back(std::string(fetch->data, fetch->numBytes));
+//     emscripten_fetch_close(fetch); // Free data associated with the fetch.
+//     refresh();
+// }
 
-static void
-download_failed(emscripten_fetch_t* fetch)
-{
-    actions.push_back("download failed");
-    emscripten_fetch_close(fetch); // Also free data on failure.
-    refresh();
-}
+// static void
+// download_failed(emscripten_fetch_t* fetch)
+// {
+//     actions.push_back("download failed");
+//     emscripten_fetch_close(fetch); // Also free data on failure.
+//     refresh();
+// }
 
 int
 main()
 {
-    the_system.controller = do_ui;
+    the_system.controller = std::ref(the_dom);
+    the_dom.wrapped = do_ui;
 
     emscripten_set_main_loop(refresh, 0, 0);
 
@@ -647,18 +371,18 @@ main()
     emscripten::val document = emscripten::val::global("document");
     emscripten::val root
         = document.call<emscripten::val>("getElementById", std::string("root"));
-    current_view = asmdom::h("div", std::string("Initial view"));
-    asmdom::patch(root, current_view);
+    the_dom.system.current_view = asmdom::h("div", std::string(""));
+    asmdom::patch(root, the_dom.system.current_view);
 
-    // Fetch some data.
-    emscripten_fetch_attr_t attr;
-    emscripten_fetch_attr_init(&attr);
-    strcpy(attr.requestMethod, "GET");
-    attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY;
-    attr.onsuccess = download_succeeded;
-    attr.onerror = download_failed;
-    emscripten_fetch(&attr, "https://reqres.in/api/users/2");
-    actions.push_back("download started");
+    // // Fetch some data.
+    // emscripten_fetch_attr_t attr;
+    // emscripten_fetch_attr_init(&attr);
+    // strcpy(attr.requestMethod, "GET");
+    // attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY;
+    // attr.onsuccess = download_succeeded;
+    // attr.onerror = download_failed;
+    // emscripten_fetch(&attr, "https://reqres.in/api/users/2");
+    // actions.push_back("download started");
 
     // Update the virtual dom.
     refresh();
