@@ -3,11 +3,6 @@
 #include <emscripten/emscripten.h>
 #include <emscripten/val.h>
 
-#include "timing.hpp"
-
-void
-refresh();
-
 namespace dom {
 
 void
@@ -61,7 +56,7 @@ do_input_(dom_context ctx, bidirectional<string> value)
                                  = e["target"]["value"].as<std::string>();
                              dispatch_targeted_event(
                                  *system, update, routable_id);
-                             refresh(); // refresh_system(*system);
+                             refresh_system(*system);
                              return true;
                          }}})));
     });
@@ -116,7 +111,7 @@ do_number_input_(dom_context ctx, bidirectional<string> value)
                                  = e["target"]["value"].as<std::string>();
                              dispatch_targeted_event(
                                  *system, update, routable_id);
-                             refresh(); // refresh_system(*system);
+                             refresh_system(*system);
                              return true;
                          }}})));
     });
@@ -143,15 +138,14 @@ do_button(dom_context ctx, readable<std::string> text, action<> on_click)
                     "button",
                     asmdom::Data(
                         asmdom::Attrs{{"class", "btn btn-primary mr-1"}},
-                        asmdom::Callbacks{
-                            {"onclick",
-                             [=](emscripten::val) {
-                                 click_event click;
-                                 dispatch_targeted_event(
-                                     *system, click, routable_id);
-                                 refresh(); // refresh_system(*system);
-                                 return true;
-                             }}}),
+                        asmdom::Callbacks{{"onclick",
+                                           [=](emscripten::val) {
+                                               click_event click;
+                                               dispatch_targeted_event(
+                                                   *system, click, routable_id);
+                                               refresh_system(*system);
+                                               return true;
+                                           }}}),
                     read_signal(text)));
         }
     });

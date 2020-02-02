@@ -21,63 +21,17 @@
 
 #include "color.hpp"
 #include "dom.hpp"
-#include "timing.hpp"
 
 using std::string;
 
 using namespace alia;
 using namespace alia::literals;
 
-////
-
-millisecond_count the_millisecond_tick_count;
-
-millisecond_count
-get_millisecond_tick_count()
-{
-    static auto start = std::chrono::steady_clock::now();
-    auto now = std::chrono::steady_clock::now();
-    return std::chrono::duration_cast<
-               std::chrono::duration<millisecond_count, std::milli>>(
-               now - start)
-        .count();
-}
-
-////
-
-struct timing_interface
-{
-    virtual void
-    request_timing_event()
-        = 0;
-};
-
-/////
-
-//
-
-// TEXT CONVERSION
-
-///////
-
 using namespace dom;
 
 alia::system the_system;
 
 dom::dom_system the_dom;
-
-void
-refresh()
-{
-    static int counter = 0;
-    ++counter;
-    std::cout << "refresh #" << counter << std::endl;
-
-    the_millisecond_tick_count = get_millisecond_tick_count();
-
-    refresh_event event;
-    dispatch_event(the_system, event);
-}
 
 //////
 
@@ -360,9 +314,27 @@ do_tip_calculator(dom_context ctx)
 //     refresh();
 // }
 
+void
+refresh_for_emscripten(void*)
+{
+    refresh_system(the_system);
+}
+
+struct dom_external_interface : external_interface
+{
+    void
+    request_animation_refresh()
+    {
+        emscripten_async_call(refresh_for_emscripten, 0, -1);
+    }
+};
+
+dom_external_interface the_interface;
+
 int
 main()
 {
+    the_system.external = &the_interface;
     the_system.controller = std::ref(the_dom);
     the_dom.controller = do_ui;
 
@@ -388,7 +360,7 @@ main()
     // actions.push_back("download started");
 
     // Update the virtual dom.
-    refresh();
+    refresh_system(the_system);
 
     return 0;
 };
