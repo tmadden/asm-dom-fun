@@ -6,17 +6,17 @@
 namespace dom {
 
 void
-do_text_(dom_context ctx, readable<std::string> text)
+do_text_(dom::context ctx, readable<std::string> text)
 {
     handle_event<refresh_event>(ctx, [text](auto ctx, auto& e) {
-        get_component<dom_context_info_tag>(ctx)->current_children->push_back(
+        get_component<context_info_tag>(ctx)->current_children->push_back(
             asmdom::h(
                 "p", signal_is_readable(text) ? read_signal(text) : string()));
     });
 }
 
 void
-do_input_(dom_context ctx, bidirectional<string> value)
+do_input_(dom::context ctx, bidirectional<string> value)
 {
     input_data* data;
     get_cached_data(ctx, &data);
@@ -44,7 +44,7 @@ do_input_(dom_context ctx, bidirectional<string> value)
     auto* system = get_component<system_tag>(ctx);
 
     handle_event<refresh_event>(ctx, [=](auto ctx, auto& e) {
-        get_component<dom_context_info_tag>(ctx)->current_children->push_back(
+        get_component<context_info_tag>(ctx)->current_children->push_back(
             asmdom::h(
                 "input",
                 asmdom::Data(
@@ -70,7 +70,7 @@ do_input_(dom_context ctx, bidirectional<string> value)
 }
 
 void
-do_number_input_(dom_context ctx, bidirectional<string> value)
+do_number_input_(dom::context ctx, bidirectional<string> value)
 {
     input_data* data;
     get_cached_data(ctx, &data);
@@ -98,7 +98,7 @@ do_number_input_(dom_context ctx, bidirectional<string> value)
     auto* system = get_component<system_tag>(ctx);
 
     handle_event<refresh_event>(ctx, [=](auto ctx, auto& e) {
-        get_component<dom_context_info_tag>(ctx)->current_children->push_back(
+        get_component<context_info_tag>(ctx)->current_children->push_back(
             asmdom::h(
                 "input",
                 asmdom::Data(
@@ -125,7 +125,7 @@ do_number_input_(dom_context ctx, bidirectional<string> value)
 }
 
 void
-do_button(dom_context ctx, readable<std::string> text, action<> on_click)
+do_button(dom::context ctx, readable<std::string> text, action<> on_click)
 {
     auto id = get_node_id(ctx);
     auto routable_id = make_routable_node_id(ctx, id);
@@ -133,8 +133,8 @@ do_button(dom_context ctx, readable<std::string> text, action<> on_click)
     handle_event<refresh_event>(ctx, [=](auto ctx, auto& e) {
         if (signal_is_readable(text))
         {
-            get_component<dom_context_info_tag>(ctx)
-                ->current_children->push_back(asmdom::h(
+            get_component<context_info_tag>(ctx)->current_children->push_back(
+                asmdom::h(
                     "button",
                     asmdom::Data(
                         asmdom::Attrs{{"class", "btn btn-primary mr-1"}},
@@ -158,7 +158,7 @@ do_button(dom_context ctx, readable<std::string> text, action<> on_click)
 }
 
 void
-do_colored_box(dom_context ctx, readable<rgb8> color)
+do_colored_box(dom::context ctx, readable<rgb8> color)
 {
     handle_event<refresh_event>(ctx, [color](auto ctx, auto& e) {
         char style[64] = {'\0'};
@@ -167,7 +167,7 @@ do_colored_box(dom_context ctx, readable<rgb8> color)
             rgb8 const& c = read_signal(color);
             sprintf(style, "background-color: #%02x%02x%02x", c.r, c.g, c.b);
         }
-        get_component<dom_context_info_tag>(ctx)->current_children->push_back(
+        get_component<context_info_tag>(ctx)->current_children->push_back(
             asmdom::h(
                 "div",
                 asmdom::Data(asmdom::Attrs{{"class", "colored-box"},
@@ -176,10 +176,10 @@ do_colored_box(dom_context ctx, readable<rgb8> color)
 }
 
 static void
-handle_refresh_event(dom_context ctx, dom_system& system)
+handle_refresh_event(dom::context ctx, system& system)
 {
     asmdom::Children children;
-    get_component<dom_context_info_tag>(ctx)->current_children = &children;
+    get_component<context_info_tag>(ctx)->current_children = &children;
 
     system.controller(ctx);
 
@@ -203,12 +203,12 @@ dom_external_interface::request_animation_refresh()
 }
 
 void
-dom_system::operator()(alia::context vanilla_ctx)
+system::operator()(alia::context vanilla_ctx)
 {
-    dom_context_info* context_info;
+    context_info* context_info;
     get_data(vanilla_ctx, &context_info);
-    dom_context ctx
-        = add_component<dom_context_info_tag>(vanilla_ctx, context_info);
+    dom::context ctx
+        = add_component<context_info_tag>(vanilla_ctx, context_info);
 
     if (is_refresh_event(ctx))
     {
@@ -218,6 +218,39 @@ dom_system::operator()(alia::context vanilla_ctx)
     {
         this->controller(ctx);
     }
+}
+
+void
+initialize(
+    dom::system& dom_system,
+    alia::system& alia_system,
+    std::string const& dom_node_id,
+    std::function<void(dom::context)> controller)
+{
+    // Initialize asm-dom (once).
+    static bool asmdom_initialized = false;
+    if (!asmdom_initialized)
+    {
+        asmdom::Config config = asmdom::Config();
+        asmdom::init(config);
+        asmdom_initialized = true;
+    }
+
+    // Hook up the dom::system to the alia::system.
+    alia_system.external = &dom_system.external;
+    dom_system.external.system = &alia_system;
+    alia_system.controller = std::ref(dom_system);
+    dom_system.controller = std::move(controller);
+
+    // Replace the requested node in the DOM with our virtual DOM.
+    emscripten::val document = emscripten::val::global("document");
+    emscripten::val root
+        = document.call<emscripten::val>("getElementById", dom_node_id);
+    dom_system.current_view = asmdom::h("div", std::string(""));
+    asmdom::patch(root, dom_system.current_view);
+
+    // Update the virtual DOM.
+    refresh_system(alia_system);
 }
 
 } // namespace dom

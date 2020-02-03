@@ -31,13 +31,13 @@ using namespace dom;
 
 alia::system the_system;
 
-dom::dom_system the_dom;
+dom::system the_dom;
 
 //////
 
 void
 do_addition_ui(
-    dom_context ctx, bidirectional<double> a, bidirectional<double> b)
+    dom::context ctx, bidirectional<double> a, bidirectional<double> b)
 {
     do_input(ctx, a);
     do_input(ctx, b);
@@ -45,7 +45,7 @@ do_addition_ui(
 }
 
 void
-do_greeting_ui(dom_context ctx, bidirectional<string> name)
+do_greeting_ui(dom::context ctx, bidirectional<string> name)
 {
     // Allow the user to input their name.
     do_input(ctx, name);
@@ -59,12 +59,12 @@ do_greeting_ui(dom_context ctx, bidirectional<string> name)
 }
 
 void
-do_ui(dom_context ctx)
+do_ui(dom::context ctx)
 {
     // std::cout << "ticks: " << get_millisecond_counter() << std::endl;
 
-    // dom_context ctx
-    //     = add_component<dom_context_info_tag>(vanilla_ctx,
+    // dom::context ctx
+    //     = add_component<context_info_tag>(vanilla_ctx,
     //     &the_context_info);
 
     // do_addition_ui(
@@ -152,7 +152,7 @@ do_ui(dom_context ctx)
 }
 
 void
-do_tip_calculator(dom_context ctx)
+do_tip_calculator(dom::context ctx)
 {
     // Get the state we need.
     auto bill = get_state(ctx, empty<double>()); // defaults to uninitialized
@@ -317,21 +317,7 @@ do_tip_calculator(dom_context ctx)
 int
 main()
 {
-    the_system.external = &the_dom.external;
-    the_dom.external.system = &the_system;
-    the_system.controller = std::ref(the_dom);
-    the_dom.controller = do_ui;
-
-    // Initialize asm-dom.
-    asmdom::Config config = asmdom::Config();
-    asmdom::init(config);
-
-    // Replace <div id="root"/> with our virtual dom.
-    emscripten::val document = emscripten::val::global("document");
-    emscripten::val root
-        = document.call<emscripten::val>("getElementById", std::string("root"));
-    the_dom.current_view = asmdom::h("div", std::string(""));
-    asmdom::patch(root, the_dom.current_view);
+    initialize(the_dom, the_system, "root", do_ui);
 
     // // Fetch some data.
     // emscripten_fetch_attr_t attr;
@@ -342,9 +328,6 @@ main()
     // attr.onerror = download_failed;
     // emscripten_fetch(&attr, "https://reqres.in/api/users/2");
     // actions.push_back("download started");
-
-    // Update the virtual dom.
-    refresh_system(the_system);
 
     return 0;
 };
