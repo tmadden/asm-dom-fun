@@ -9,8 +9,8 @@
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
 //
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
 //
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -20,20 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// alia.hpp -  (58d7621fb30169e8eec6fc286c0ab98ef9d28911) - generated 2020-04-06T14:26:44+00:00
+// alia.hpp - (local) - generated 2020-04-15T17:22:36-04:00
 
 #ifndef ALIA_CORE_HPP
 #define ALIA_CORE_HPP
-
-#include <functional>
-
-
-
-#include <type_traits>
-#include <typeindex>
-#include <unordered_map>
-
-
 
 #include <cassert>
 #include <cstdint>
@@ -42,6 +32,7 @@
 #include <memory>
 #include <ostream>
 #include <string>
+#include <type_traits>
 
 // This file defines some generic functionality that's commonly used throughout
 // alia.
@@ -154,788 +145,7 @@ class function_view<Return(Args...)> final
 
 } // namespace alia
 
-
-
-// This file provides the underlying type mechanics that allow for defining the
-// context of an application as an arbitrary collection of data from disparate
-// sources (the alia core, a UI library adaptor, services that the application
-// is dependent on, higher-level parts of the application, etc.). This set of
-// data obviously varies across applications (and even across modules within a
-// complex application). The goal here is to allow applications to freely mix
-// together data/objects from multiple sources (which may not know about one
-// another).
-//
-// Some additional design considerations follow.
-//
-// 1. An application should be able to easily define its own data types and mix
-//    those into its context. This includes application-level state. If there is
-//    state that is essentially global to the application (e.g., the active
-//    user), application code should be able to retrieve this from the
-//    application context. Similarly, a component of the application should be
-//    able to extend the application's context with state that is specific to
-//    that component (but ubiquitous within it).
-//
-// 2. Functions that take contexts as arguments should be able to define the set
-//    of context elements that they require as part of the type signature of the
-//    context. (Context elements would be identified by compile-time type tags.)
-//    Any caller whose context includes a superset of those tags should be able
-//    to call the function with an implicit conversion of the context parameter.
-//    This should all be possible without needing to define functions as
-//    templates (otherwise alia-based applications would end up being entirely
-//    header-based) and with minimal (ideally zero) runtime overhead in
-//    converting the caller's context to the type expected by the function.
-//
-// 3. Retrieving frames/capabilities from a context should require minimal
-//    (ideally zero) runtime overhead.
-//
-// 4. Static type checking of context conversions/retrievals should be possible
-//    but optional. Developers should not have to pay these compile-time costs
-//    unless it's desired. It should be possible to use a mixed workflow where
-//    these checks are replaced by runtime checks for iterative development but
-//    enabled for CI/release builds.
-//
-// In order to satisfy #4, this file looks for a #define called
-// ALIA_DYNAMIC_CONTEXT_CHECKS. If this is set, code related to statically
-// checking context contents is omitted and dynamic checks are substituted where
-// appropriate. Note that when ALIA_DYNAMIC_CONTEXT_CHECKS is NOT set,
-// ALIA_STATIC_CONTEXT_CHECKS is set and static checks are included.
-//
-// The statically typed structural_collection object is a simple wrapper around
-// the dynamically typed storage object. It adds a compile-time type list
-// indicating what's actually supposed to be in the collection. This allows
-// collections to be converted to other collection types without any run-time
-// overhead. This does imply some run-time overhead for retrieving data from the
-// collection, but that can be mitigated by providing zero-cost retrieval for
-// select (core) data. This also implies that the collection object must be
-// passed by value (or const& - though there's no real point in that) whereas
-// passing by reference would be more obvious, but that seems unavoidable given
-// the requirements.
-
-#ifndef ALIA_DYNAMIC_CONTEXT_CHECKS
-#define ALIA_STATIC_CONTEXT_CHECKS
-#endif
-
-namespace alia {
-
-namespace impl {
-
-#define ALIA_DEFINE_TAGGED_TYPE(tag, data)                                     \
-    struct tag                                                                 \
-    {                                                                          \
-        typedef data data_type;                                                \
-    };
-
-template<class Tags, class Storage>
-struct structural_collection;
-
-#ifdef ALIA_STATIC_CONTEXT_CHECKS
-
-// tag_list<Tags...> defines a simple compile-time list of tags. This is held by
-// a structural_collection to provide compile-time tracking of its contents.
-template<class... Tags>
-struct tag_list
-{
-};
-
-// list_contains_tag<List,Tag>::value yields a compile-time boolean indicating
-// whether or not the tag_list :List contains :Tag.
-template<class List, class Tag>
-struct list_contains_tag
-{
-};
-// base case - The list is empty, so the tag isn't in there.
-template<class Tag>
-struct list_contains_tag<tag_list<>, Tag> : std::false_type
-{
-};
-// case where tag matches
-template<class Tag, class... Rest>
-struct list_contains_tag<tag_list<Tag, Rest...>, Tag> : std::true_type
-{
-};
-// non-matching (recursive) case
-template<class Tag, class OtherTag, class... Rest>
-struct list_contains_tag<tag_list<OtherTag, Rest...>, Tag>
-    : list_contains_tag<tag_list<Rest...>, Tag>
-{
-};
-
-// structural_collection_contains_tag<Collection,Tag>::value yields a
-// compile-time boolean indicating whether or not :Collection contains an item
-// with the tag :Tag.
-template<class Collection, class Tag>
-struct structural_collection_contains_tag
-{
-};
-template<class Tags, class Storage, class Tag>
-struct structural_collection_contains_tag<
-    structural_collection<Tags, Storage>,
-    Tag> : list_contains_tag<Tags, Tag>
-{
-};
-
-// add_tag_to_list<List,Tag>::type yields the list that results from adding :Tag
-// to the head of :List.
-//
-// Note that this doesn't perform any checks for duplicates.
-//
-template<class List, class Tag>
-struct add_tag_to_list
-{
-};
-template<class Tag, class... Tags>
-struct add_tag_to_list<tag_list<Tags...>, Tag>
-{
-    typedef tag_list<Tag, Tags...> type;
-};
-
-// remove_tag_from_list<List,Tag>::type yields the list that results from
-// removing the tag matching :Tag from :List.
-//
-// Note that removing a tag that's not actually in the list is not considered an
-// error.
-//
-template<class List, class Tag>
-struct remove_tag_from_list
-{
-};
-// base case (list is empty)
-template<class Tag>
-struct remove_tag_from_list<tag_list<>, Tag>
-{
-    typedef tag_list<> type;
-};
-// case where an item matches
-template<class Tag, class... Rest>
-struct remove_tag_from_list<tag_list<Tag, Rest...>, Tag>
-    : remove_tag_from_list<tag_list<Rest...>, Tag>
-{
-};
-// non-matching case
-template<class Tag, class OtherTag, class... Rest>
-struct remove_tag_from_list<tag_list<OtherTag, Rest...>, Tag>
-    : add_tag_to_list<
-          typename remove_tag_from_list<tag_list<Rest...>, Tag>::type,
-          OtherTag>
-{
-};
-
-// collection_contains_all_tags<Collection,Tags...>::value yields a compile-time
-// boolean indicating whether or not :Collection contains all tags in :Tags.
-template<class Collection, class... Tags>
-struct collection_contains_all_tags
-{
-};
-// base case - The list of tags to search for is empty, so this is trivially
-// true.
-template<class Collection>
-struct collection_contains_all_tags<Collection> : std::true_type
-{
-};
-// recursive case
-template<class Collection, class Tag, class... Rest>
-struct collection_contains_all_tags<Collection, Tag, Rest...>
-    : std::conditional_t<
-          structural_collection_contains_tag<Collection, Tag>::value,
-          collection_contains_all_tags<Collection, Rest...>,
-          std::false_type>
-{
-};
-
-// merge_tag_lists<A,B>::type yields a list of tags that includes all tags from
-// :A and :B (with no duplicates).
-template<class A, class B>
-struct merge_tag_lists
-{
-};
-// base case (:A is empty)
-template<class B>
-struct merge_tag_lists<tag_list<>, B>
-{
-    typedef B type;
-};
-// recursive case
-template<class B, class AHead, class... ARest>
-struct merge_tag_lists<tag_list<AHead, ARest...>, B>
-    : add_tag_to_list<
-          // Ensure that :AHead isn't duplicated. (This may be a noop.)
-          typename remove_tag_from_list<
-              typename merge_tag_lists<tag_list<ARest...>, B>::type,
-              AHead>::type,
-          AHead>
-{
-};
-
-// structural_collection_is_convertible<From,To>::value yields a
-// compile-time boolean indicating whether or not the type :From can be
-// converted to the type :To (both must be structural_collections).
-// The requirements for this are that a) the storage types are the same and b)
-// the tags of :From are a superset of those of :To.
-template<class From, class To>
-struct structural_collection_is_convertible
-{
-};
-// case where storage types differ
-template<class FromTags, class FromStorage, class ToTags, class ToStorage>
-struct structural_collection_is_convertible<
-    structural_collection<FromTags, FromStorage>,
-    structural_collection<ToTags, ToStorage>> : std::false_type
-{
-};
-// case where storage types are the same, so tags must be checked
-template<class Storage, class FromTags, class... ToTags>
-struct structural_collection_is_convertible<
-    structural_collection<FromTags, Storage>,
-    structural_collection<tag_list<ToTags...>, Storage>>
-    : collection_contains_all_tags<
-          structural_collection<FromTags, Storage>,
-          ToTags...>
-{
-};
-
-template<class Tags, class Storage>
-struct structural_collection
-{
-    typedef Tags tags;
-    typedef Storage storage_type;
-
-    structural_collection(Storage* storage) : storage(storage)
-    {
-    }
-
-    // copy constructor (from convertible collections)
-    template<class Other>
-    structural_collection(
-        Other other,
-        std::enable_if_t<structural_collection_is_convertible<
-            Other,
-            structural_collection>::value>* = 0)
-        : storage(other.storage)
-    {
-    }
-
-    // assignment operator (from convertible collections)
-    template<class Other>
-    std::enable_if_t<
-        structural_collection_is_convertible<Other, structural_collection>::
-            value,
-        structural_collection&>
-    operator=(Other other)
-    {
-        storage = other.storage;
-        return *this;
-    }
-
-    Storage* storage;
-};
-
-// empty_structural_collection<Storage> yields a structural collection with
-// no data and :Storage as its storage type.
-template<class Storage>
-using empty_structural_collection = structural_collection<tag_list<>, Storage>;
-
-// add_tagged_data_type<Collection,Tag>::type gives the type that results
-// from extending :Collection with the data type defined by :Tag.
-template<class Collection, class Tag>
-struct add_tagged_data_type
-{
-};
-template<class Tag, class Storage, class... Tags>
-struct add_tagged_data_type<
-    structural_collection<tag_list<Tags...>, Storage>,
-    Tag>
-{
-    static_assert(
-        !list_contains_tag<tag_list<Tags...>, Tag>::value,
-        "duplicate context tag");
-    typedef structural_collection<tag_list<Tag, Tags...>, Storage> type;
-};
-template<class Collection, class Tag>
-using add_tagged_data_type_t =
-    typename add_tagged_data_type<Collection, Tag>::type;
-
-// add_tagged_data_types<Collection,Tag...>::type gives the type that results
-// from extending :Collection with the data types defined by the given list of
-// tags.
-template<class Collection, class... Tag>
-struct add_tagged_data_types
-{
-};
-template<class Collection>
-struct add_tagged_data_types<Collection>
-{
-    typedef Collection type;
-};
-template<class Collection, class Tag, class... Rest>
-struct add_tagged_data_types<Collection, Tag, Rest...>
-    : add_tagged_data_types<
-          typename add_tagged_data_type<Collection, Tag>::type,
-          Rest...>
-{
-};
-template<class Collection, class... Tag>
-using add_tagged_data_types_t =
-    typename add_tagged_data_types<Collection, Tag...>::type;
-
-// remove_tagged_data_type<Collection,Tag>::type yields the type that results
-// from removing the data type associated with :Tag from :Collection.
-template<class Collection, class Tag>
-struct remove_tagged_data_type
-{
-};
-template<class Tag, class Storage, class Tags>
-struct remove_tagged_data_type<structural_collection<Tags, Storage>, Tag>
-{
-    static_assert(
-        list_contains_tag<Tags, Tag>::value,
-        "attempting to remove a tag that doesn't exist");
-    typedef structural_collection<
-        typename remove_tag_from_list<Tags, Tag>::type,
-        Storage>
-        type;
-};
-template<class Collection, class Tag>
-using remove_tagged_data_type_t =
-    typename remove_tagged_data_type<Collection, Tag>::type;
-
-// merge_structural_collections<A,B>::type yields a structural collection type
-// that contains all the tags from :A and :B (but no duplicates). Note that the
-// resulting collection inherits the storage type of :A.
-template<class A, class B>
-struct merge_structural_collections
-{
-    typedef structural_collection<
-        typename merge_tag_lists<typename A::tags, typename B::tags>::type,
-        typename A::storage_type>
-        type;
-};
-template<class A, class B>
-using merge_structural_collections_t =
-    typename merge_structural_collections<A, B>::type;
-
-#else
-
-struct dynamic_tag_list
-{
-};
-
-template<class Tags, class Storage>
-struct structural_collection
-{
-    typedef Tags tags;
-    typedef Storage storage_type;
-
-    structural_collection(Storage* storage) : storage(storage)
-    {
-    }
-
-    Storage* storage;
-};
-
-// structural_collection_is_convertible<From,To>::value yields a
-// compile-time boolean indicating whether or not the type :From can be
-// converted to the type :To (both must be structural_collections).
-// Since this is the dynamic version, the requirements for this are simply that
-// the storage types are the same.
-template<class From, class To>
-struct structural_collection_is_convertible
-{
-};
-// case where storage types differ
-template<class FromTags, class FromStorage, class ToTags, class ToStorage>
-struct structural_collection_is_convertible<
-    structural_collection<FromTags, FromStorage>,
-    structural_collection<ToTags, ToStorage>> : std::false_type
-{
-};
-// case where storage types are the same
-template<class Storage, class FromTags, class ToTags>
-struct structural_collection_is_convertible<
-    structural_collection<FromTags, Storage>,
-    structural_collection<ToTags, Storage>> : std::true_type
-{
-};
-
-// empty_structural_collection<Storage> yields a structural collection with no
-// item and :Storage as its storage type.
-template<class Storage>
-using empty_structural_collection
-    = structural_collection<dynamic_tag_list, Storage>;
-
-// add_tagged_data_type<Collection,Tag>::type gives the type that results from
-// extending :Collection with the data type defined by :Tag and :Data.
-template<class Collection, class Tag>
-struct add_tagged_data_type
-{
-    typedef Collection type;
-};
-template<class Collection, class Tag>
-using add_tagged_data_type_t =
-    typename add_tagged_data_type<Collection, Tag>::type;
-
-// add_tagged_data_types<Collection,Tag...>::type gives the type that results
-// from extending :Collection with the data types defined by the given list of
-// tags.
-template<class Collection, class... Tag>
-struct add_tagged_data_types
-{
-    typedef Collection type;
-};
-template<class Collection, class... Tag>
-using add_tagged_data_types_t =
-    typename add_tagged_data_types<Collection, Tag...>::type;
-
-// remove_tagged_data_type<Collection,Tag>::type yields the type that results
-// from removing the data type associated with :Tag from :Collection.
-template<class Collection, class Tag>
-struct remove_tagged_data_type
-{
-    typedef Collection type;
-};
-template<class Collection, class Tag>
-using remove_tagged_data_type_t =
-    typename remove_tagged_data_type<Collection, Tag>::type;
-
-// merge_structural_collections<A,B>::type yields a structural collection type
-// that contains all the tags from :A and :B (but no duplicates). Note that the
-// resulting tags collection inherits the storage type of :A.
-template<class A, class B>
-struct merge_structural_collections
-{
-    typedef A type;
-};
-template<class A, class B>
-using merge_structural_collections_t =
-    typename merge_structural_collections<A, B>::type;
-
-#endif
-
-// Make an empty structural collection for the given storage object.
-template<class Storage>
-empty_structural_collection<Storage>
-make_empty_structural_collection(Storage* storage)
-{
-    return empty_structural_collection<Storage>(storage);
-}
-
-// Extend a collection by adding a new data object.
-// :Tag is the tag of the new data.
-// :data is the data.
-//
-// Note that although this returns a new collection (with the correct type), the
-// new collection shares the storage of the original, so this should be used
-// with caution.
-//
-template<class Tag, class Collection, class Data>
-add_tagged_data_type_t<Collection, Tag>
-add_tagged_data(Collection collection, Data&& data)
-{
-    auto* storage = collection.storage;
-    // Add the new data to the storage object.
-    storage->template add<Tag>(std::forward<Data&&>(data));
-    // Create a collection with the proper type to reference the storage.
-    return add_tagged_data_type_t<Collection, Tag>(storage);
-}
-
-// Remove an item from a collection.
-// :Tag is the tag of the item.
-//
-// As with add_tagged_data(), although this returns a new collection for typing
-// purposes, the new collection shares the storage of the original, so use with
-// caution.
-//
-template<class Tag, class Collection>
-remove_tagged_data_type_t<Collection, Tag>
-remove_tagged_data(Collection collection)
-{
-    typename Collection::storage_type* storage = collection.storage;
-    // We only actually have to remove the item if we're using dynamic context
-    // checking. With static checking, it doesn't matter if the runtime storage
-    // includes an extra item. Static checks will prevent its use.
-#ifdef ALIA_DYNAMIC_CONTEXT_CHECKS
-    // Remove the item from the storage object.
-    storage->template remove<Tag>();
-#endif
-    return remove_tagged_data_type_t<Collection, Tag>(storage);
-}
-
-// Remove an item from a collection.
-//
-// With this version, you supply a new storage object, and the function uses it
-// if needed to ensure that the original collection's storage is left untouched.
-//
-#ifdef ALIA_STATIC_CONTEXT_CHECKS
-template<class Tag, class Collection, class Storage>
-remove_tagged_data_type_t<Collection, Tag>
-remove_tagged_data(Collection collection, Storage*)
-{
-    return remove_tagged_data_type_t<Collection, Tag>(collection.storage);
-}
-#else
-template<class Tag, class Collection, class Storage>
-remove_tagged_data_type_t<Collection, Tag>
-remove_tagged_data(Collection collection, Storage* new_storage)
-{
-    *new_storage = *collection.storage;
-    new_storage->template remove<Tag>();
-    return remove_tagged_data_type_t<Collection, Tag>(new_storage);
-}
-#endif
-
-// Determine if a tag is in a collection.
-#ifdef ALIA_STATIC_CONTEXT_CHECKS
-template<class Tag, class Collection>
-bool has_tagged_data(Collection)
-{
-    return structural_collection_contains_tag<Collection, Tag>::value;
-}
-#else
-template<class Tag, class Collection>
-bool
-has_tagged_data(Collection collection)
-{
-    return collection.storage->template has<Tag>();
-}
-#endif
-
-#ifdef ALIA_DYNAMIC_CONTEXT_CHECKS
-
-// When using dynamic context checking, this error is thrown when trying to
-// retrieve a tag that's not actually present in a collection.
-template<class Tag>
-struct tagged_data_not_found : exception
-{
-    tagged_data_not_found()
-        : exception(
-              std::string("tag not found in context:\n") + typeid(Tag).name())
-    {
-    }
-};
-
-#endif
-
-// tagged_data_caster should be specialized so that it properly casts from
-// stored data to the expected types.
-
-template<class Stored, class Expected>
-struct tagged_data_caster
-{
-};
-
-// If we're stored what's expected, then the cast is trivial.
-template<class T>
-struct tagged_data_caster<T, T>
-{
-    static T
-    apply(T stored)
-    {
-        return stored;
-    }
-};
-template<class T>
-struct tagged_data_caster<T&, T>
-{
-    static T&
-    apply(T& stored)
-    {
-        return stored;
-    }
-};
-
-// Get a reference to the data associated with a tag in a collection. If static
-// checking is enabled, this generates a compile-time error if :Tag isn't
-// contained in :collection.
-template<class Tag, class Collection>
-decltype(auto)
-get_tagged_data(Collection collection)
-{
-#ifdef ALIA_STATIC_CONTEXT_CHECKS
-    static_assert(
-        structural_collection_contains_tag<Collection, Tag>::value,
-        "tag not found in context");
-#else
-    if (!has_tagged_data<Tag>(collection))
-        throw tagged_data_not_found<Tag>();
-#endif
-    return tagged_data_caster<
-        decltype(collection.storage->template get<Tag>()),
-        typename Tag::data_type>::apply(collection.storage
-                                            ->template get<Tag>());
-}
-
-} // namespace impl
-
-} // namespace alia
-
-
-namespace alia {
-
-namespace impl {
-
-// generic_tagged_storage is one possible implementation of the underlying
-// container for storing the actual data associated with a tag.
-// :Data is the type used to the store data.
-template<class Data>
-struct generic_tagged_storage
-{
-    std::unordered_map<std::type_index, Data> objects;
-
-    template<class Tag>
-    bool
-    has() const
-    {
-        return this->objects.find(std::type_index(typeid(Tag)))
-               != this->objects.end();
-    }
-
-    template<class Tag, class ObjectData>
-    void
-    add(ObjectData&& data)
-    {
-        this->objects[std::type_index(typeid(Tag))]
-            = std::forward<ObjectData&&>(data);
-    }
-
-    template<class Tag>
-    void
-    remove()
-    {
-        this->objects.erase(std::type_index(typeid(Tag)));
-    }
-
-    template<class Tag>
-    Data&
-    get()
-    {
-        return this->objects.at(std::type_index(typeid(Tag)));
-    }
-};
-
-// any_ref is a simple way to store references to any type in a
-// generic_tagged_storage object.
-struct any_ref
-{
-    any_ref()
-    {
-    }
-
-    template<class T>
-    any_ref(std::reference_wrapper<T> ref) : ptr(&ref.get())
-    {
-    }
-
-    void* ptr;
-};
-
-template<class T>
-struct tagged_data_caster<any_ref&, T&>
-{
-    static T&
-    apply(any_ref stored)
-    {
-        return *reinterpret_cast<T*>(stored.ptr);
-    }
-};
-template<class T>
-struct tagged_data_caster<any_ref, T&>
-{
-    static T&
-    apply(any_ref stored)
-    {
-        return *reinterpret_cast<T*>(stored.ptr);
-    }
-};
-
-// The following provides a small framework for defining more specialized
-// storage structures with direct storage of frequently used objects. See
-// context.hpp for an example of how it's used.
-
-template<class Storage, class Tag>
-struct tagged_data_accessor
-{
-    static bool
-    has(Storage const& storage)
-    {
-        return storage.generic.template has<Tag>();
-    }
-    static void
-    add(Storage& storage, any_ref data)
-    {
-        storage.generic.template add<Tag>(data);
-    }
-    static void
-    remove(Storage& storage)
-    {
-        storage.generic.template remove<Tag>();
-    }
-    static any_ref
-    get(Storage& storage)
-    {
-        return storage.generic.template get<Tag>();
-    }
-};
-
-#define ALIA_IMPLEMENT_STORAGE_OBJECT_ACCESSORS(Storage)                       \
-    template<class Tag>                                                        \
-    bool has() const                                                           \
-    {                                                                          \
-        return impl::tagged_data_accessor<Storage, Tag>::has(*this);           \
-    }                                                                          \
-                                                                               \
-    template<class Tag, class Data>                                            \
-    void add(Data&& data)                                                      \
-    {                                                                          \
-        impl::tagged_data_accessor<Storage, Tag>::add(                         \
-            *this, std::forward<Data&&>(data));                                \
-    }                                                                          \
-                                                                               \
-    template<class Tag>                                                        \
-    void remove()                                                              \
-    {                                                                          \
-        impl::tagged_data_accessor<Storage, Tag>::remove(*this);               \
-    }                                                                          \
-                                                                               \
-    template<class Tag>                                                        \
-    decltype(auto) get()                                                       \
-    {                                                                          \
-        return impl::tagged_data_accessor<Storage, Tag>::get(*this);           \
-    }
-
-#define ALIA_ADD_DIRECT_TAGGED_DATA_ACCESS(Storage, Tag, name)                 \
-    namespace impl {                                                           \
-    template<>                                                                 \
-    struct tagged_data_accessor<Storage, Tag>                                  \
-    {                                                                          \
-        static bool                                                            \
-        has(Storage const& storage)                                            \
-        {                                                                      \
-            return storage.name != nullptr;                                    \
-        }                                                                      \
-        static void                                                            \
-        add(Storage& storage, Tag::data_type data)                             \
-        {                                                                      \
-            storage.name = &data;                                              \
-        }                                                                      \
-        static void                                                            \
-        remove(Storage& storage)                                               \
-        {                                                                      \
-            storage.name = nullptr;                                            \
-        }                                                                      \
-        static Tag::data_type                                                  \
-        get(Storage& storage)                                                  \
-        {                                                                      \
-            return *storage.name;                                              \
-        }                                                                      \
-    };                                                                         \
-    }
-
-} // namespace impl
-
-} // namespace alia
-
-
-
-
+#include <functional>
 #include <sstream>
 
 // This file implements the concept of IDs in alia.
@@ -1360,6 +570,783 @@ static simple_id<unit_id_type*> const unit_id(nullptr);
 
 } // namespace alia
 
+#include <typeindex>
+#include <unordered_map>
+
+// This file provides the underlying type mechanics that allow for defining the
+// context of an application as an arbitrary collection of data from disparate
+// sources (the alia core, a UI library adaptor, services that the application
+// is dependent on, higher-level parts of the application, etc.). This set of
+// data obviously varies across applications (and even across modules within a
+// complex application). The goal here is to allow applications to freely mix
+// together data/objects from multiple sources (which may not know about one
+// another).
+//
+// Some additional design considerations follow.
+//
+// 1. An application should be able to easily define its own data types and mix
+//    those into its context. This includes application-level state. If there is
+//    state that is essentially global to the application (e.g., the active
+//    user), application code should be able to retrieve this from the
+//    application context. Similarly, a component of the application should be
+//    able to extend the application's context with state that is specific to
+//    that component (but ubiquitous within it).
+//
+// 2. Functions that take contexts as arguments should be able to define the set
+//    of context elements that they require as part of the type signature of the
+//    context. (Context elements would be identified by compile-time type tags.)
+//    Any caller whose context includes a superset of those tags should be able
+//    to call the function with an implicit conversion of the context parameter.
+//    This should all be possible without needing to define functions as
+//    templates (otherwise alia-based applications would end up being entirely
+//    header-based) and with minimal (ideally zero) runtime overhead in
+//    converting the caller's context to the type expected by the function.
+//
+// 3. Retrieving frames/capabilities from a context should require minimal
+//    (ideally zero) runtime overhead.
+//
+// 4. Static type checking of context conversions/retrievals should be possible
+//    but optional. Developers should not have to pay these compile-time costs
+//    unless it's desired. It should be possible to use a mixed workflow where
+//    these checks are replaced by runtime checks for iterative development but
+//    enabled for CI/release builds.
+//
+// In order to satisfy #4, this file looks for a #define called
+// ALIA_DYNAMIC_CONTEXT_CHECKS. If this is set, code related to statically
+// checking context contents is omitted and dynamic checks are substituted where
+// appropriate. Note that when ALIA_DYNAMIC_CONTEXT_CHECKS is NOT set,
+// ALIA_STATIC_CONTEXT_CHECKS is set and static checks are included.
+//
+// The statically typed structural_collection object is a simple wrapper around
+// the dynamically typed storage object. It adds a compile-time type list
+// indicating what's actually supposed to be in the collection. This allows
+// collections to be converted to other collection types without any run-time
+// overhead. This does imply some run-time overhead for retrieving data from the
+// collection, but that can be mitigated by providing zero-cost retrieval for
+// select (core) data. This also implies that the collection object must be
+// passed by value (or const& - though there's no real point in that) whereas
+// passing by reference would be more obvious, but that seems unavoidable given
+// the requirements.
+
+#ifndef ALIA_DYNAMIC_CONTEXT_CHECKS
+#define ALIA_STATIC_CONTEXT_CHECKS
+#endif
+
+namespace alia {
+
+namespace impl {
+
+#define ALIA_DEFINE_TAGGED_TYPE(tag, data)                                     \
+    struct tag                                                                 \
+    {                                                                          \
+        typedef data data_type;                                                \
+    };
+
+template<class Tags, class Storage>
+struct structural_collection;
+
+#ifdef ALIA_STATIC_CONTEXT_CHECKS
+
+// tag_list<Tags...> defines a simple compile-time list of tags. This is held by
+// a structural_collection to provide compile-time tracking of its contents.
+template<class... Tags>
+struct tag_list
+{
+};
+
+// list_contains_tag<List,Tag>::value yields a compile-time boolean indicating
+// whether or not the tag_list :List contains :Tag.
+template<class List, class Tag>
+struct list_contains_tag
+{
+};
+// base case - The list is empty, so the tag isn't in there.
+template<class Tag>
+struct list_contains_tag<tag_list<>, Tag> : std::false_type
+{
+};
+// case where tag matches
+template<class Tag, class... Rest>
+struct list_contains_tag<tag_list<Tag, Rest...>, Tag> : std::true_type
+{
+};
+// non-matching (recursive) case
+template<class Tag, class OtherTag, class... Rest>
+struct list_contains_tag<tag_list<OtherTag, Rest...>, Tag>
+    : list_contains_tag<tag_list<Rest...>, Tag>
+{
+};
+
+// structural_collection_contains_tag<Collection,Tag>::value yields a
+// compile-time boolean indicating whether or not :Collection contains an item
+// with the tag :Tag.
+template<class Collection, class Tag>
+struct structural_collection_contains_tag
+{
+};
+template<class Tags, class Storage, class Tag>
+struct structural_collection_contains_tag<
+    structural_collection<Tags, Storage>,
+    Tag> : list_contains_tag<Tags, Tag>
+{
+};
+
+// add_tag_to_list<List,Tag>::type yields the list that results from adding :Tag
+// to the head of :List.
+//
+// Note that this doesn't perform any checks for duplicates.
+//
+template<class List, class Tag>
+struct add_tag_to_list
+{
+};
+template<class Tag, class... Tags>
+struct add_tag_to_list<tag_list<Tags...>, Tag>
+{
+    typedef tag_list<Tag, Tags...> type;
+};
+
+// remove_tag_from_list<List,Tag>::type yields the list that results from
+// removing the tag matching :Tag from :List.
+//
+// Note that removing a tag that's not actually in the list is not considered an
+// error.
+//
+template<class List, class Tag>
+struct remove_tag_from_list
+{
+};
+// base case (list is empty)
+template<class Tag>
+struct remove_tag_from_list<tag_list<>, Tag>
+{
+    typedef tag_list<> type;
+};
+// case where an item matches
+template<class Tag, class... Rest>
+struct remove_tag_from_list<tag_list<Tag, Rest...>, Tag>
+    : remove_tag_from_list<tag_list<Rest...>, Tag>
+{
+};
+// non-matching case
+template<class Tag, class OtherTag, class... Rest>
+struct remove_tag_from_list<tag_list<OtherTag, Rest...>, Tag>
+    : add_tag_to_list<
+          typename remove_tag_from_list<tag_list<Rest...>, Tag>::type,
+          OtherTag>
+{
+};
+
+// collection_contains_all_tags<Collection,Tags...>::value yields a compile-time
+// boolean indicating whether or not :Collection contains all tags in :Tags.
+template<class Collection, class... Tags>
+struct collection_contains_all_tags
+{
+};
+// base case - The list of tags to search for is empty, so this is trivially
+// true.
+template<class Collection>
+struct collection_contains_all_tags<Collection> : std::true_type
+{
+};
+// recursive case
+template<class Collection, class Tag, class... Rest>
+struct collection_contains_all_tags<Collection, Tag, Rest...>
+    : std::conditional_t<
+          structural_collection_contains_tag<Collection, Tag>::value,
+          collection_contains_all_tags<Collection, Rest...>,
+          std::false_type>
+{
+};
+
+// merge_tag_lists<A,B>::type yields a list of tags that includes all tags from
+// :A and :B (with no duplicates).
+template<class A, class B>
+struct merge_tag_lists
+{
+};
+// base case (:A is empty)
+template<class B>
+struct merge_tag_lists<tag_list<>, B>
+{
+    typedef B type;
+};
+// recursive case
+template<class B, class AHead, class... ARest>
+struct merge_tag_lists<tag_list<AHead, ARest...>, B>
+    : add_tag_to_list<
+          // Ensure that :AHead isn't duplicated. (This may be a noop.)
+          typename remove_tag_from_list<
+              typename merge_tag_lists<tag_list<ARest...>, B>::type,
+              AHead>::type,
+          AHead>
+{
+};
+
+// structural_collection_is_convertible<From,To>::value yields a
+// compile-time boolean indicating whether or not the type :From can be
+// converted to the type :To (both must be structural_collections).
+// The requirements for this are that a) the storage types are the same and b)
+// the tags of :From are a superset of those of :To.
+template<class From, class To>
+struct structural_collection_is_convertible
+{
+};
+// case where storage types differ
+template<class FromTags, class FromStorage, class ToTags, class ToStorage>
+struct structural_collection_is_convertible<
+    structural_collection<FromTags, FromStorage>,
+    structural_collection<ToTags, ToStorage>> : std::false_type
+{
+};
+// case where storage types are the same, so tags must be checked
+template<class Storage, class FromTags, class... ToTags>
+struct structural_collection_is_convertible<
+    structural_collection<FromTags, Storage>,
+    structural_collection<tag_list<ToTags...>, Storage>>
+    : collection_contains_all_tags<
+          structural_collection<FromTags, Storage>,
+          ToTags...>
+{
+};
+
+template<class Tags, class Storage>
+struct structural_collection
+{
+    typedef Tags tags;
+    typedef Storage storage_type;
+
+    structural_collection(Storage* storage) : storage(storage)
+    {
+    }
+
+    // copy constructor (from convertible collections)
+    template<class Other>
+    structural_collection(
+        Other other,
+        std::enable_if_t<structural_collection_is_convertible<
+            Other,
+            structural_collection>::value>* = 0)
+        : storage(other.storage)
+    {
+    }
+
+    // assignment operator (from convertible collections)
+    template<class Other>
+    std::enable_if_t<
+        structural_collection_is_convertible<Other, structural_collection>::
+            value,
+        structural_collection&>
+    operator=(Other other)
+    {
+        storage = other.storage;
+        return *this;
+    }
+
+    Storage* storage;
+};
+
+// empty_structural_collection<Storage> yields a structural collection with
+// no data and :Storage as its storage type.
+template<class Storage>
+using empty_structural_collection = structural_collection<tag_list<>, Storage>;
+
+// add_tagged_data_type<Collection,Tag>::type gives the type that results
+// from extending :Collection with the data type defined by :Tag.
+template<class Collection, class Tag>
+struct add_tagged_data_type
+{
+};
+template<class Tag, class Storage, class... Tags>
+struct add_tagged_data_type<
+    structural_collection<tag_list<Tags...>, Storage>,
+    Tag>
+{
+    static_assert(
+        !list_contains_tag<tag_list<Tags...>, Tag>::value,
+        "duplicate context tag");
+    typedef structural_collection<tag_list<Tag, Tags...>, Storage> type;
+};
+template<class Collection, class Tag>
+using add_tagged_data_type_t =
+    typename add_tagged_data_type<Collection, Tag>::type;
+
+// add_tagged_data_types<Collection,Tag...>::type gives the type that results
+// from extending :Collection with the data types defined by the given list of
+// tags.
+template<class Collection, class... Tag>
+struct add_tagged_data_types
+{
+};
+template<class Collection>
+struct add_tagged_data_types<Collection>
+{
+    typedef Collection type;
+};
+template<class Collection, class Tag, class... Rest>
+struct add_tagged_data_types<Collection, Tag, Rest...>
+    : add_tagged_data_types<
+          typename add_tagged_data_type<Collection, Tag>::type,
+          Rest...>
+{
+};
+template<class Collection, class... Tag>
+using add_tagged_data_types_t =
+    typename add_tagged_data_types<Collection, Tag...>::type;
+
+// remove_tagged_data_type<Collection,Tag>::type yields the type that results
+// from removing the data type associated with :Tag from :Collection.
+template<class Collection, class Tag>
+struct remove_tagged_data_type
+{
+};
+template<class Tag, class Storage, class Tags>
+struct remove_tagged_data_type<structural_collection<Tags, Storage>, Tag>
+{
+    // Note that it's considered OK to remove a tag that's not actually in the
+    // collection.
+    typedef structural_collection<
+        typename remove_tag_from_list<Tags, Tag>::type,
+        Storage>
+        type;
+};
+template<class Collection, class Tag>
+using remove_tagged_data_type_t =
+    typename remove_tagged_data_type<Collection, Tag>::type;
+
+// merge_structural_collections<A,B>::type yields a structural collection type
+// that contains all the tags from :A and :B (but no duplicates). Note that the
+// resulting collection inherits the storage type of :A.
+template<class A, class B>
+struct merge_structural_collections
+{
+    typedef structural_collection<
+        typename merge_tag_lists<typename A::tags, typename B::tags>::type,
+        typename A::storage_type>
+        type;
+};
+template<class A, class B>
+using merge_structural_collections_t =
+    typename merge_structural_collections<A, B>::type;
+
+#else
+
+struct dynamic_tag_list
+{
+};
+
+template<class Tags, class Storage>
+struct structural_collection
+{
+    typedef Tags tags;
+    typedef Storage storage_type;
+
+    structural_collection(Storage* storage) : storage(storage)
+    {
+    }
+
+    Storage* storage;
+};
+
+// structural_collection_is_convertible<From,To>::value yields a
+// compile-time boolean indicating whether or not the type :From can be
+// converted to the type :To (both must be structural_collections).
+// Since this is the dynamic version, the requirements for this are simply that
+// the storage types are the same.
+template<class From, class To>
+struct structural_collection_is_convertible
+{
+};
+// case where storage types differ
+template<class FromTags, class FromStorage, class ToTags, class ToStorage>
+struct structural_collection_is_convertible<
+    structural_collection<FromTags, FromStorage>,
+    structural_collection<ToTags, ToStorage>> : std::false_type
+{
+};
+// case where storage types are the same
+template<class Storage, class FromTags, class ToTags>
+struct structural_collection_is_convertible<
+    structural_collection<FromTags, Storage>,
+    structural_collection<ToTags, Storage>> : std::true_type
+{
+};
+
+// empty_structural_collection<Storage> yields a structural collection with no
+// item and :Storage as its storage type.
+template<class Storage>
+using empty_structural_collection
+    = structural_collection<dynamic_tag_list, Storage>;
+
+// add_tagged_data_type<Collection,Tag>::type gives the type that results from
+// extending :Collection with the data type defined by :Tag and :Data.
+template<class Collection, class Tag>
+struct add_tagged_data_type
+{
+    typedef Collection type;
+};
+template<class Collection, class Tag>
+using add_tagged_data_type_t =
+    typename add_tagged_data_type<Collection, Tag>::type;
+
+// add_tagged_data_types<Collection,Tag...>::type gives the type that results
+// from extending :Collection with the data types defined by the given list of
+// tags.
+template<class Collection, class... Tag>
+struct add_tagged_data_types
+{
+    typedef Collection type;
+};
+template<class Collection, class... Tag>
+using add_tagged_data_types_t =
+    typename add_tagged_data_types<Collection, Tag...>::type;
+
+// remove_tagged_data_type<Collection,Tag>::type yields the type that results
+// from removing the data type associated with :Tag from :Collection.
+template<class Collection, class Tag>
+struct remove_tagged_data_type
+{
+    typedef Collection type;
+};
+template<class Collection, class Tag>
+using remove_tagged_data_type_t =
+    typename remove_tagged_data_type<Collection, Tag>::type;
+
+// merge_structural_collections<A,B>::type yields a structural collection type
+// that contains all the tags from :A and :B (but no duplicates). Note that the
+// resulting tags collection inherits the storage type of :A.
+template<class A, class B>
+struct merge_structural_collections
+{
+    typedef A type;
+};
+template<class A, class B>
+using merge_structural_collections_t =
+    typename merge_structural_collections<A, B>::type;
+
+#endif
+
+// Make an empty structural collection for the given storage object.
+template<class Storage>
+empty_structural_collection<Storage>
+make_empty_structural_collection(Storage* storage)
+{
+    return empty_structural_collection<Storage>(storage);
+}
+
+// Extend a collection by adding a new data object.
+// :Tag is the tag of the new data.
+// :data is the data.
+//
+// Note that although this returns a new collection (with the correct type), the
+// new collection shares the storage of the original, so this should be used
+// with caution.
+//
+template<class Tag, class Collection, class Data>
+add_tagged_data_type_t<Collection, Tag>
+add_tagged_data(Collection collection, Data&& data)
+{
+    auto* storage = collection.storage;
+    // Add the new data to the storage object.
+    storage->template add<Tag>(std::forward<Data&&>(data));
+    // Create a collection with the proper type to reference the storage.
+    return add_tagged_data_type_t<Collection, Tag>(storage);
+}
+
+// Remove an item from a collection.
+// :Tag is the tag of the item.
+//
+// As with add_tagged_data(), although this returns a new collection for typing
+// purposes, the new collection shares the storage of the original, so use with
+// caution.
+//
+template<class Tag, class Collection>
+remove_tagged_data_type_t<Collection, Tag>
+remove_tagged_data(Collection collection)
+{
+    typename Collection::storage_type* storage = collection.storage;
+    // We only actually have to remove the item if we're using dynamic context
+    // checking. With static checking, it doesn't matter if the runtime storage
+    // includes an extra item. Static checks will prevent its use.
+#ifdef ALIA_DYNAMIC_CONTEXT_CHECKS
+    // Remove the item from the storage object.
+    storage->template remove<Tag>();
+#endif
+    return remove_tagged_data_type_t<Collection, Tag>(storage);
+}
+
+// Remove an item from a collection.
+//
+// With this version, you supply a new storage object, and the function uses it
+// if needed to ensure that the original collection's storage is left untouched.
+//
+#ifdef ALIA_STATIC_CONTEXT_CHECKS
+template<class Tag, class Collection, class Storage>
+remove_tagged_data_type_t<Collection, Tag>
+remove_tagged_data(Collection collection, Storage*)
+{
+    return remove_tagged_data_type_t<Collection, Tag>(collection.storage);
+}
+#else
+template<class Tag, class Collection, class Storage>
+remove_tagged_data_type_t<Collection, Tag>
+remove_tagged_data(Collection collection, Storage* new_storage)
+{
+    *new_storage = *collection.storage;
+    new_storage->template remove<Tag>();
+    return remove_tagged_data_type_t<Collection, Tag>(new_storage);
+}
+#endif
+
+// Determine if a tag is in a collection.
+#ifdef ALIA_STATIC_CONTEXT_CHECKS
+template<class Tag, class Collection>
+bool has_tagged_data(Collection)
+{
+    return structural_collection_contains_tag<Collection, Tag>::value;
+}
+#else
+template<class Tag, class Collection>
+bool
+has_tagged_data(Collection collection)
+{
+    return collection.storage->template has<Tag>();
+}
+#endif
+
+#ifdef ALIA_DYNAMIC_CONTEXT_CHECKS
+
+// When using dynamic context checking, this error is thrown when trying to
+// retrieve a tag that's not actually present in a collection.
+template<class Tag>
+struct tagged_data_not_found : exception
+{
+    tagged_data_not_found()
+        : exception(
+            std::string("tag not found in context:\n") + typeid(Tag).name())
+    {
+    }
+};
+
+#endif
+
+// tagged_data_caster should be specialized so that it properly casts from
+// stored data to the expected types.
+
+template<class Stored, class Expected>
+struct tagged_data_caster
+{
+};
+
+// If we're stored what's expected, then the cast is trivial.
+template<class T>
+struct tagged_data_caster<T, T>
+{
+    static T
+    apply(T stored)
+    {
+        return stored;
+    }
+};
+template<class T>
+struct tagged_data_caster<T&, T>
+{
+    static T&
+    apply(T& stored)
+    {
+        return stored;
+    }
+};
+
+// Get a reference to the data associated with a tag in a collection. If static
+// checking is enabled, this generates a compile-time error if :Tag isn't
+// contained in :collection.
+template<class Tag, class Collection>
+decltype(auto)
+get_tagged_data(Collection collection)
+{
+#ifdef ALIA_STATIC_CONTEXT_CHECKS
+    static_assert(
+        structural_collection_contains_tag<Collection, Tag>::value,
+        "tag not found in context");
+#else
+    if (!has_tagged_data<Tag>(collection))
+        throw tagged_data_not_found<Tag>();
+#endif
+    return tagged_data_caster<
+        decltype(collection.storage->template get<Tag>()),
+        typename Tag::data_type>::apply(collection.storage
+                                            ->template get<Tag>());
+}
+
+} // namespace impl
+
+} // namespace alia
+
+namespace alia {
+
+namespace impl {
+
+// generic_tagged_storage is one possible implementation of the underlying
+// container for storing the actual data associated with a tag.
+// :Data is the type used to the store data.
+template<class Data>
+struct generic_tagged_storage
+{
+    std::unordered_map<std::type_index, Data> objects;
+
+    template<class Tag>
+    bool
+    has() const
+    {
+        return this->objects.find(std::type_index(typeid(Tag)))
+               != this->objects.end();
+    }
+
+    template<class Tag, class ObjectData>
+    void
+    add(ObjectData&& data)
+    {
+        this->objects[std::type_index(typeid(Tag))]
+            = std::forward<ObjectData&&>(data);
+    }
+
+    template<class Tag>
+    void
+    remove()
+    {
+        this->objects.erase(std::type_index(typeid(Tag)));
+    }
+
+    template<class Tag>
+    Data&
+    get()
+    {
+        return this->objects.at(std::type_index(typeid(Tag)));
+    }
+};
+
+// any_ref is a simple way to store references to any type in a
+// generic_tagged_storage object.
+struct any_ref
+{
+    any_ref()
+    {
+    }
+
+    template<class T>
+    any_ref(std::reference_wrapper<T> ref) : ptr(&ref.get())
+    {
+    }
+
+    void* ptr;
+};
+
+template<class T>
+struct tagged_data_caster<any_ref&, T&>
+{
+    static T&
+    apply(any_ref stored)
+    {
+        return *reinterpret_cast<T*>(stored.ptr);
+    }
+};
+template<class T>
+struct tagged_data_caster<any_ref, T&>
+{
+    static T&
+    apply(any_ref stored)
+    {
+        return *reinterpret_cast<T*>(stored.ptr);
+    }
+};
+
+// The following provides a small framework for defining more specialized
+// storage structures with direct storage of frequently used objects. See
+// context.hpp for an example of how it's used.
+
+template<class Storage, class Tag>
+struct tagged_data_accessor
+{
+    static bool
+    has(Storage const& storage)
+    {
+        return storage.generic.template has<Tag>();
+    }
+    static void
+    add(Storage& storage, any_ref data)
+    {
+        storage.generic.template add<Tag>(data);
+    }
+    static void
+    remove(Storage& storage)
+    {
+        storage.generic.template remove<Tag>();
+    }
+    static any_ref
+    get(Storage& storage)
+    {
+        return storage.generic.template get<Tag>();
+    }
+};
+
+#define ALIA_IMPLEMENT_STORAGE_OBJECT_ACCESSORS(Storage)                       \
+    template<class Tag>                                                        \
+    bool has() const                                                           \
+    {                                                                          \
+        return impl::tagged_data_accessor<Storage, Tag>::has(*this);           \
+    }                                                                          \
+                                                                               \
+    template<class Tag, class Data>                                            \
+    void add(Data&& data)                                                      \
+    {                                                                          \
+        impl::tagged_data_accessor<Storage, Tag>::add(                         \
+            *this, std::forward<Data&&>(data));                                \
+    }                                                                          \
+                                                                               \
+    template<class Tag>                                                        \
+    void remove()                                                              \
+    {                                                                          \
+        impl::tagged_data_accessor<Storage, Tag>::remove(*this);               \
+    }                                                                          \
+                                                                               \
+    template<class Tag>                                                        \
+    decltype(auto) get()                                                       \
+    {                                                                          \
+        return impl::tagged_data_accessor<Storage, Tag>::get(*this);           \
+    }
+
+#define ALIA_ADD_DIRECT_TAGGED_DATA_ACCESS(Storage, Tag, name)                 \
+    namespace impl {                                                           \
+    template<>                                                                 \
+    struct tagged_data_accessor<Storage, Tag>                                  \
+    {                                                                          \
+        static bool                                                            \
+        has(Storage const& storage)                                            \
+        {                                                                      \
+            return storage.name != nullptr;                                    \
+        }                                                                      \
+        static void                                                            \
+        add(Storage& storage, Tag::data_type data)                             \
+        {                                                                      \
+            storage.name = &data;                                              \
+        }                                                                      \
+        static void                                                            \
+        remove(Storage& storage)                                               \
+        {                                                                      \
+            storage.name = nullptr;                                            \
+        }                                                                      \
+        static Tag::data_type                                                  \
+        get(Storage& storage)                                                  \
+        {                                                                      \
+            return *storage.name;                                              \
+        }                                                                      \
+    };                                                                         \
+    }
+
+} // namespace impl
+
+} // namespace alia
 
 // This file defines the core types and functions of the signals module.
 
@@ -1752,8 +1739,6 @@ struct validation_error : exception
 
 } // namespace alia
 
-
-
 // This file defines various utilities for working with signals.
 // (These are mostly meant to be used internally.)
 
@@ -1915,7 +1900,6 @@ refresh_signal_shadow(
 }
 
 } // namespace alia
-
 
 // This file defines various utilities for constructing basic signals.
 
@@ -2115,8 +2099,6 @@ direct(Value const& x)
 
 } // namespace alia
 
-
-
 namespace alia {
 
 struct data_traversal;
@@ -2309,7 +2291,391 @@ get_data_traversal(Context ctx)
 
 } // namespace alia
 
+// This file defines the alia action interface, some common implementations of
+// it, and some utilities for working with it.
+//
+// An action is essentially a response to an event that's dispatched by alia.
+// When specifying a component that can generate events, the application
+// supplies the action that should be performed when the corresponding event is
+// generated. Using this style allows event handling to be written in a safer
+// and more declarative manner.
+//
+// Actions are very similar to signals in the way that they are used in an
+// application. Like signals, they're typically created directly at the call
+// site as function arguments and are only valid for the life of the function
+// call.
 
+namespace alia {
+
+// untyped_action_interface defines functionality common to all actions,
+// irrespective of the type of arguments that the action takes.
+struct untyped_action_interface
+{
+    // Is this action ready to be performed?
+    virtual bool
+    is_ready() const = 0;
+};
+
+template<class... Args>
+struct action_interface : untyped_action_interface
+{
+    // Perform this action.
+    //
+    // :intermediary is used to implement the latch-like semantics of actions.
+    // It should be invoked AFTER reading any signals you need to read but
+    // BEFORE invoking any side effects.
+    //
+    virtual void
+    perform(function_view<void()> const& intermediary, Args... args) const = 0;
+};
+
+// is_action_type<T>::value yields a compile-time boolean indicating whether or
+// not T is an alia action type.
+template<class T>
+struct is_action_type : std::is_base_of<untyped_action_interface, T>
+{
+};
+
+// Is the given action ready?
+template<class... Args>
+bool
+action_is_ready(action_interface<Args...> const& action)
+{
+    return action.is_ready();
+}
+
+// Perform an action.
+template<class... Args>
+void
+perform_action(action_interface<Args...> const& action, Args... args)
+{
+    if (action.is_ready())
+        action.perform([]() {}, args...);
+}
+
+// action_ref is a reference to an action that implements the action interface
+// itself.
+template<class... Args>
+struct action_ref : action_interface<Args...>
+{
+    // Construct from a reference to another action.
+    action_ref(action_interface<Args...> const& ref) : action_(&ref)
+    {
+    }
+    // Construct from another action_ref. - This is meant to prevent unnecessary
+    // layers of indirection.
+    action_ref(action_ref<Args...> const& other) : action_(other.action_)
+    {
+    }
+
+    bool
+    is_ready() const
+    {
+        return action_->is_ready();
+    }
+
+    void
+    perform(function_view<void()> const& intermediary, Args... args) const
+    {
+        action_->perform(intermediary, args...);
+    }
+
+ private:
+    action_interface<Args...> const* action_;
+};
+
+template<class... Args>
+using action = action_ref<Args...>;
+
+// comma operator
+//
+// Using the comma operator between two actions creates a combined action that
+// performs the two actions in sequence.
+
+template<class First, class Second, class Interface>
+struct action_pair;
+
+template<class First, class Second, class... Args>
+struct action_pair<First, Second, action_interface<Args...>>
+    : action_interface<Args...>
+{
+    action_pair(First const& first, Second const& second)
+        : first_(first), second_(second)
+    {
+    }
+
+    bool
+    is_ready() const
+    {
+        return first_.is_ready() && second_.is_ready();
+    }
+
+    void
+    perform(function_view<void()> const& intermediary, Args... args) const
+    {
+        second_.perform(
+            [&]() { first_.perform(intermediary, args...); }, args...);
+    }
+
+ private:
+    First first_;
+    Second second_;
+};
+
+template<
+    class First,
+    class Second,
+    std::enable_if_t<
+        is_action_type<First>::value && is_action_type<Second>::value,
+        int> = 0>
+auto
+operator,(First const& first, Second const& second)
+{
+    return action_pair<First, Second, typename First::action_interface>(
+        first, second);
+}
+
+// operator <<
+//
+// (a << s), where a is an action and s is a readable signal, returns another
+// action that is like :a but with the value of :s bound to its first argument.
+//
+template<class Action, class Signal, class Interface>
+struct bound_action;
+template<class Action, class Signal, class BoundArg, class... Args>
+struct bound_action<Action, Signal, action_interface<BoundArg, Args...>>
+    : action_interface<Args...>
+{
+    bound_action(Action const& action, Signal const& signal)
+        : action_(action), signal_(signal)
+    {
+    }
+
+    bool
+    is_ready() const
+    {
+        return action_.is_ready() && signal_.has_value();
+    }
+
+    void
+    perform(function_view<void()> const& intermediary, Args... args) const
+    {
+        action_.perform(intermediary, signal_.read(), args...);
+    }
+
+ private:
+    Action action_;
+    Signal signal_;
+};
+template<
+    class Action,
+    class Signal,
+    std::enable_if_t<
+        is_action_type<Action>::value && is_readable_signal_type<Signal>::value,
+        int> = 0>
+auto
+operator<<(Action const& action, Signal const& signal)
+{
+    return bound_action<Action, Signal, typename Action::action_interface>(
+        action, signal);
+}
+template<
+    class Action,
+    class Value,
+    std::enable_if_t<
+        is_action_type<Action>::value && !is_signal_type<Value>::value,
+        int> = 0>
+auto
+operator<<(Action const& action, Value const& v)
+{
+    return action << value(v);
+}
+
+// operator <<=
+//
+// sink <<= source, where :sink and :source are both signals, creates an
+// action that will set the value of :sink to the value held in :source. In
+// order for the action to be considered ready, :source must have a value and
+// :sink must be ready to write.
+
+template<class Sink, class Source>
+struct copy_action : action_interface<>
+{
+    copy_action(Sink sink, Source source) : sink_(sink), source_(source)
+    {
+    }
+
+    bool
+    is_ready() const
+    {
+        return source_.has_value() && sink_.ready_to_write();
+    }
+
+    void
+    perform(function_view<void()> const& intermediary) const
+    {
+        auto value = source_.read();
+        intermediary();
+        sink_.write(value);
+    }
+
+ private:
+    Sink sink_;
+    Source source_;
+};
+
+template<
+    class Sink,
+    class Source,
+    std::enable_if_t<
+        is_writable_signal_type<Sink>::value
+            && is_readable_signal_type<Source>::value,
+        int> = 0>
+auto
+operator<<=(Sink sink, Source source)
+{
+    return copy_action<Sink, Source>(sink, source);
+}
+
+template<
+    class Sink,
+    class Source,
+    std::enable_if_t<
+        is_writable_signal_type<Sink>::value && !is_signal_type<Source>::value,
+        int> = 0>
+auto
+operator<<=(Sink sink, Source source)
+{
+    return sink <<= value(source);
+}
+
+// toggle(flag), where :flag is a signal to a boolean, creates an action
+// that will toggle the value of :flag between true and false.
+//
+// Note that this could also be used with other value types as long as the !
+// operator provides a reasonable "toggle" function.
+//
+template<class Flag>
+auto
+toggle(Flag flag)
+{
+    return flag <<= !flag;
+}
+
+// push_back(container), where :container is a signal, creates an action that
+// takes an item as a parameter and pushes it onto the back of :container.
+
+template<class Container, class Item>
+struct push_back_action : action_interface<Item>
+{
+    push_back_action(Container container) : container_(container)
+    {
+    }
+
+    bool
+    is_ready() const
+    {
+        return container_.has_value() && container_.ready_to_write();
+    }
+
+    void
+    perform(function_view<void()> const& intermediary, Item item) const
+    {
+        auto new_container = container_.read();
+        new_container.push_back(item);
+        intermediary();
+        container_.write(new_container);
+    }
+
+ private:
+    Container container_;
+};
+
+template<class Container>
+auto
+push_back(Container container)
+{
+    return push_back_action<
+        Container,
+        typename Container::value_type::value_type>(container);
+}
+
+// lambda_action(is_ready, perform) creates an action whose behavior is
+// defined by two function objects.
+//
+// :is_ready takes no arguments and simply returns true or false to indicate if
+// the action is ready to be performed.
+//
+// :perform can take any number/type of arguments and defines the signature
+// of the action.
+
+template<class Function>
+struct call_operator_action_signature
+{
+};
+
+template<class T, class R, class... Args>
+struct call_operator_action_signature<R (T::*)(Args...) const>
+{
+    typedef action_interface<Args...> type;
+};
+
+template<class Lambda>
+struct lambda_action_signature
+    : call_operator_action_signature<decltype(&Lambda::operator())>
+{
+};
+
+template<class IsReady, class Perform, class Interface>
+struct lambda_action_object;
+
+template<class IsReady, class Perform, class... Args>
+struct lambda_action_object<IsReady, Perform, action_interface<Args...>>
+    : action_interface<Args...>
+{
+    lambda_action_object(IsReady is_ready, Perform perform)
+        : is_ready_(is_ready), perform_(perform)
+    {
+    }
+
+    bool
+    is_ready() const
+    {
+        return is_ready_();
+    }
+
+    void
+    perform(function_view<void()> const& intermediary, Args... args) const
+    {
+        intermediary();
+        perform_(args...);
+    }
+
+ private:
+    IsReady is_ready_;
+    Perform perform_;
+};
+
+template<class IsReady, class Perform>
+auto
+lambda_action(IsReady is_ready, Perform perform)
+{
+    return lambda_action_object<
+        IsReady,
+        Perform,
+        typename lambda_action_signature<Perform>::type>(is_ready, perform);
+}
+
+// The single-argument version of lambda_action creates an action that's always
+// ready to perform.
+template<class Perform>
+auto
+lambda_action(Perform perform)
+{
+    return lambda_action([]() { return true; }, perform);
+}
+
+} // namespace alia
 
 // This file defines the data retrieval library used for associating mutable
 // state and cached data with alia content graphs. It is designed so that each
@@ -3034,610 +3400,6 @@ struct scoped_data_traversal
 
 } // namespace alia
 
-
-
-
-// This file defines the alia action interface, some common implementations of
-// it, and some utilities for working with it.
-//
-// An action is essentially a response to an event that's dispatched by alia.
-// When specifying a component that can generate events, the application
-// supplies the action that should be performed when the corresponding event is
-// generated. Using this style allows event handling to be written in a safer
-// and more declarative manner.
-//
-// Actions are very similar to signals in the way that they are used in an
-// application. Like signals, they're typically created directly at the call
-// site as function arguments and are only valid for the life of the function
-// call.
-
-namespace alia {
-
-// untyped_action_interface defines functionality common to all actions,
-// irrespective of the type of arguments that the action takes.
-struct untyped_action_interface
-{
-    // Is this action ready to be performed?
-    virtual bool
-    is_ready() const = 0;
-};
-
-template<class... Args>
-struct action_interface : untyped_action_interface
-{
-    // Perform this action.
-    //
-    // :intermediary is used to implement the latch-like semantics of actions.
-    // It should be invoked AFTER reading any signals you need to read but
-    // BEFORE invoking any side effects.
-    //
-    virtual void
-    perform(function_view<void()> const& intermediary, Args... args) const = 0;
-};
-
-// is_action_type<T>::value yields a compile-time boolean indicating whether or
-// not T is an alia action type.
-template<class T>
-struct is_action_type : std::is_base_of<untyped_action_interface, T>
-{
-};
-
-// Is the given action ready?
-template<class... Args>
-bool
-action_is_ready(action_interface<Args...> const& action)
-{
-    return action.is_ready();
-}
-
-// Perform an action.
-template<class... Args>
-void
-perform_action(action_interface<Args...> const& action, Args... args)
-{
-    if (action.is_ready())
-        action.perform([]() {}, args...);
-}
-
-// action_ref is a reference to an action that implements the action interface
-// itself.
-template<class... Args>
-struct action_ref : action_interface<Args...>
-{
-    // Construct from a reference to another action.
-    action_ref(action_interface<Args...> const& ref) : action_(&ref)
-    {
-    }
-    // Construct from another action_ref. - This is meant to prevent unnecessary
-    // layers of indirection.
-    action_ref(action_ref<Args...> const& other) : action_(other.action_)
-    {
-    }
-
-    bool
-    is_ready() const
-    {
-        return action_->is_ready();
-    }
-
-    void
-    perform(function_view<void()> const& intermediary, Args... args) const
-    {
-        action_->perform(intermediary, args...);
-    }
-
- private:
-    action_interface<Args...> const* action_;
-};
-
-template<class... Args>
-using action = action_ref<Args...>;
-
-// comma operator
-//
-// Using the comma operator between two actions creates a combined action that
-// performs the two actions in sequence.
-
-template<class First, class Second, class Interface>
-struct action_pair;
-
-template<class First, class Second, class... Args>
-struct action_pair<First, Second, action_interface<Args...>>
-    : action_interface<Args...>
-{
-    action_pair(First const& first, Second const& second)
-        : first_(first), second_(second)
-    {
-    }
-
-    bool
-    is_ready() const
-    {
-        return first_.is_ready() && second_.is_ready();
-    }
-
-    void
-    perform(function_view<void()> const& intermediary, Args... args) const
-    {
-        second_.perform(
-            [&]() { first_.perform(intermediary, args...); }, args...);
-    }
-
- private:
-    First first_;
-    Second second_;
-};
-
-template<
-    class First,
-    class Second,
-    std::enable_if_t<
-        is_action_type<First>::value && is_action_type<Second>::value,
-        int> = 0>
-auto
-operator,(First const& first, Second const& second)
-{
-    return action_pair<First, Second, typename First::action_interface>(
-        first, second);
-}
-
-// operator <<
-//
-// (a << s), where a is an action and s is a readable signal, returns another
-// action that is like :a but with the value of :s bound to its first argument.
-//
-template<class Action, class Signal, class Interface>
-struct bound_action;
-template<class Action, class Signal, class BoundArg, class... Args>
-struct bound_action<Action, Signal, action_interface<BoundArg, Args...>>
-    : action_interface<Args...>
-{
-    bound_action(Action const& action, Signal const& signal)
-        : action_(action), signal_(signal)
-    {
-    }
-
-    bool
-    is_ready() const
-    {
-        return action_.is_ready() && signal_.has_value();
-    }
-
-    void
-    perform(function_view<void()> const& intermediary, Args... args) const
-    {
-        action_.perform(intermediary, signal_.read(), args...);
-    }
-
- private:
-    Action action_;
-    Signal signal_;
-};
-template<
-    class Action,
-    class Signal,
-    std::enable_if_t<
-        is_action_type<Action>::value && is_readable_signal_type<Signal>::value,
-        int> = 0>
-auto
-operator<<(Action const& action, Signal const& signal)
-{
-    return bound_action<Action, Signal, typename Action::action_interface>(
-        action, signal);
-}
-template<
-    class Action,
-    class Value,
-    std::enable_if_t<
-        is_action_type<Action>::value && !is_signal_type<Value>::value,
-        int> = 0>
-auto
-operator<<(Action const& action, Value const& v)
-{
-    return action << value(v);
-}
-
-// operator <<=
-//
-// sink <<= source, where :sink and :source are both signals, creates an
-// action that will set the value of :sink to the value held in :source. In
-// order for the action to be considered ready, :source must have a value and
-// :sink must be ready to write.
-
-template<class Sink, class Source>
-struct copy_action : action_interface<>
-{
-    copy_action(Sink sink, Source source) : sink_(sink), source_(source)
-    {
-    }
-
-    bool
-    is_ready() const
-    {
-        return source_.has_value() && sink_.ready_to_write();
-    }
-
-    void
-    perform(function_view<void()> const& intermediary) const
-    {
-        auto value = source_.read();
-        intermediary();
-        sink_.write(value);
-    }
-
- private:
-    Sink sink_;
-    Source source_;
-};
-
-template<
-    class Sink,
-    class Source,
-    std::enable_if_t<
-        is_writable_signal_type<Sink>::value
-            && is_readable_signal_type<Source>::value,
-        int> = 0>
-auto
-operator<<=(Sink sink, Source source)
-{
-    return copy_action<Sink, Source>(sink, source);
-}
-
-template<
-    class Sink,
-    class Source,
-    std::enable_if_t<
-        is_writable_signal_type<Sink>::value && !is_signal_type<Source>::value,
-        int> = 0>
-auto
-operator<<=(Sink sink, Source source)
-{
-    return sink <<= value(source);
-}
-
-// toggle(flag), where :flag is a signal to a boolean, creates an action
-// that will toggle the value of :flag between true and false.
-//
-// Note that this could also be used with other value types as long as the !
-// operator provides a reasonable "toggle" function.
-//
-template<class Flag>
-auto
-toggle(Flag flag)
-{
-    return flag <<= !flag;
-}
-
-// push_back(container), where :container is a signal, creates an action that
-// takes an item as a parameter and pushes it onto the back of :container.
-
-template<class Container, class Item>
-struct push_back_action : action_interface<Item>
-{
-    push_back_action(Container container) : container_(container)
-    {
-    }
-
-    bool
-    is_ready() const
-    {
-        return container_.has_value() && container_.ready_to_write();
-    }
-
-    void
-    perform(function_view<void()> const& intermediary, Item item) const
-    {
-        auto new_container = container_.read();
-        new_container.push_back(item);
-        intermediary();
-        container_.write(new_container);
-    }
-
- private:
-    Container container_;
-};
-
-template<class Container>
-auto
-push_back(Container container)
-{
-    return push_back_action<
-        Container,
-        typename Container::value_type::value_type>(container);
-}
-
-// lambda_action(is_ready, perform) creates an action whose behavior is
-// defined by two function objects.
-//
-// :is_ready takes no arguments and simply returns true or false to indicate if
-// the action is ready to be performed.
-//
-// :perform can take any number/type of arguments and defines the signature
-// of the action.
-
-template<class Function>
-struct call_operator_action_signature
-{
-};
-
-template<class T, class R, class... Args>
-struct call_operator_action_signature<R (T::*)(Args...) const>
-{
-    typedef action_interface<Args...> type;
-};
-
-template<class Lambda>
-struct lambda_action_signature
-    : call_operator_action_signature<decltype(&Lambda::operator())>
-{
-};
-
-template<class IsReady, class Perform, class Interface>
-struct lambda_action_object;
-
-template<class IsReady, class Perform, class... Args>
-struct lambda_action_object<IsReady, Perform, action_interface<Args...>>
-    : action_interface<Args...>
-{
-    lambda_action_object(IsReady is_ready, Perform perform)
-        : is_ready_(is_ready), perform_(perform)
-    {
-    }
-
-    bool
-    is_ready() const
-    {
-        return is_ready_();
-    }
-
-    void
-    perform(function_view<void()> const& intermediary, Args... args) const
-    {
-        intermediary();
-        perform_(args...);
-    }
-
- private:
-    IsReady is_ready_;
-    Perform perform_;
-};
-
-template<class IsReady, class Perform>
-auto
-lambda_action(IsReady is_ready, Perform perform)
-{
-    return lambda_action_object<
-        IsReady,
-        Perform,
-        typename lambda_action_signature<Perform>::type>(is_ready, perform);
-}
-
-// The single-argument version of lambda_action creates an action that's always
-// ready to perform.
-template<class Perform>
-auto
-lambda_action(Perform perform)
-{
-    return lambda_action([]() { return true; }, perform);
-}
-
-} // namespace alia
-
-
-namespace alia {
-
-// Currently, alia's only sense of time is that of a monotonically increasing
-// millisecond counter. It's understood to have an arbitrary start point and is
-// allowed to wrap around, so 'unsigned' is considered sufficient.
-typedef unsigned millisecond_count;
-
-struct timing_subsystem
-{
-    millisecond_count tick_counter = 0;
-};
-
-// Request that the UI context refresh again quickly enough for smooth
-// animation.
-void
-request_animation_refresh(dataless_context ctx);
-
-// Get the value of the millisecond tick counter associated with the given
-// UI context. This counter is updated every refresh pass, so it's consistent
-// within a single frame.
-// When this is called, it's assumed that something is currently animating, so
-// it also requests a refresh.
-millisecond_count
-get_raw_animation_tick_count(dataless_context ctx);
-
-// Same as above, but returns a signal rather than a raw integer.
-value_signal<millisecond_count>
-get_animation_tick_count(dataless_context ctx);
-
-// Get the number of ticks remaining until the given end time.
-// If the time has passed, this returns 0.
-// This ensures that the UI context refreshes until the end time is reached.
-millisecond_count
-get_raw_animation_ticks_left(dataless_context ctx, millisecond_count end_tick);
-
-struct animation_timer_state
-{
-    bool active = false;
-    millisecond_count end_tick;
-};
-
-struct raw_animation_timer
-{
-    raw_animation_timer(context ctx) : ctx_(ctx)
-    {
-        get_cached_data(ctx, &state_);
-        update();
-    }
-    raw_animation_timer(dataless_context ctx, animation_timer_state& state)
-        : ctx_(ctx), state_(&state)
-    {
-        update();
-    }
-    bool
-    is_active() const
-    {
-        return state_->active;
-    }
-    millisecond_count
-    ticks_left() const
-    {
-        return ticks_left_;
-    }
-    void
-    start(millisecond_count duration)
-    {
-        state_->active = true;
-        state_->end_tick = get_raw_animation_tick_count(ctx_) + duration;
-    }
-
- private:
-    void
-    update()
-    {
-        if (state_->active)
-        {
-            ticks_left_ = get_raw_animation_ticks_left(ctx_, state_->end_tick);
-            if (ticks_left_ == 0)
-                state_->active = false;
-        }
-        else
-        {
-            ticks_left_ = 0;
-        }
-    }
-
-    dataless_context ctx_;
-    animation_timer_state* state_;
-    millisecond_count ticks_left_;
-};
-
-struct animation_timer
-{
-    animation_timer(context ctx) : raw_(ctx)
-    {
-    }
-    animation_timer(dataless_context ctx, animation_timer_state& state)
-        : raw_(ctx, state)
-    {
-    }
-    auto
-    is_active() const
-    {
-        return value(raw_.is_active());
-    }
-    auto
-    ticks_left() const
-    {
-        return value(raw_.ticks_left());
-    }
-    auto
-    start()
-    {
-        return lambda_action(
-            [&](millisecond_count duration) { raw_.start(duration); });
-    }
-
- private:
-    raw_animation_timer raw_;
-};
-
-} // namespace alia
-
-
-namespace alia {
-
-millisecond_count
-get_default_tick_count();
-
-struct external_interface
-{
-    // alia calls this every frame when an animation is in progress.
-    virtual void
-    request_animation_refresh()
-    {
-    }
-
-    // Get the current value of the system's millisecond tick counter.
-    // The default implementation of this uses std::chrono::steady_clock.
-    virtual millisecond_count
-    get_tick_count() const
-    {
-        return get_default_tick_count();
-    }
-};
-
-struct system
-{
-    data_graph data;
-    std::function<void(context)> controller;
-    bool refresh_needed = false;
-    external_interface* external = nullptr;
-};
-
-inline bool
-system_needs_refresh(system const& sys)
-{
-    return sys.refresh_needed;
-}
-
-void
-refresh_system(system& sys);
-
-} // namespace alia
-
-
-namespace alia {
-
-// unit_cubic_bezier represents a cubic bezier whose end points are (0, 0)
-// and (1, 1).
-struct unit_cubic_bezier
-{
-    double p1x, p1y, p2x, p2y;
-};
-
-// unit_cubic_bezier_coefficients describes a unit cubic bezier curve by the
-// coefficients in its parametric equation form.
-struct unit_cubic_bezier_coefficients
-{
-    double ax, ay, bx, by, cx, cy;
-};
-
-unit_cubic_bezier_coefficients
-compute_curve_coefficients(unit_cubic_bezier const& bezier);
-
-// Solve for t at a point x in a unit cubic curve.
-// This should only be called on curves that are expressible in y = f(x) form.
-double
-solve_for_t_at_x(
-    unit_cubic_bezier_coefficients const& coeff,
-    double x,
-    double error_tolerance);
-
-// This is the same as above but always uses a bisection search.
-// It's simple but likely slower and is primarily exposed for testing purposes.
-double
-solve_for_t_at_x_with_bisection_search(
-    unit_cubic_bezier_coefficients const& coeff,
-    double x,
-    double error_tolerance);
-
-// Evaluate a unit_cubic_bezier at the given x value.
-// Since this is an approximation, the caller must specify a tolerance value
-// to control the error in the result.
-double
-eval_curve_at_x(
-    unit_cubic_bezier const& curve, double x, double error_tolerance);
-
-} // namespace alia
-
-
-
-
-
 namespace alia {
 
 // The following are utilities that are used to implement the control flow
@@ -4024,6 +3786,17 @@ read_condition(T const& x)
 
 } // namespace alia
 
+namespace alia {
+
+struct system;
+
+bool
+system_needs_refresh(system const& sys);
+
+void
+refresh_system(system& sys);
+
+} // namespace alia
 
 // This file implements utilities for routing events through an alia content
 // traversal function.
@@ -4184,58 +3957,59 @@ on_event(Context ctx, Handler&& handler)
     ALIA_END
 }
 
-struct node_identity
+struct component_identity
 {
 };
-typedef node_identity const* node_id;
+typedef component_identity const* component_id;
 
-inline node_id
-get_node_id(context ctx)
+inline component_id
+get_component_id(context ctx)
 {
-    return &get_cached_data<node_identity>(ctx);
+    return &get_cached_data<component_identity>(ctx);
 }
 
-// routable_node_id identifies a node with enough information that an event can
-// be routed to it.
-struct routable_node_id
+// routable_component_id identifies a node with enough information that an event
+// can be routed to it.
+struct routable_component_id
 {
-    node_id id = nullptr;
+    component_id id = nullptr;
     routing_region_ptr region;
 };
 
-inline routable_node_id
-make_routable_node_id(node_id id, routing_region_ptr region)
+inline routable_component_id
+make_routable_component_id(component_id id, routing_region_ptr region)
 {
-    routable_node_id routable;
+    routable_component_id routable;
     routable.id = id;
     routable.region = region;
     return routable;
 }
 
-inline routable_node_id
-make_routable_node_id(dataless_context ctx, node_id id)
+inline routable_component_id
+make_routable_component_id(dataless_context ctx, component_id id)
 {
-    return make_routable_node_id(id, get_active_routing_region(ctx));
+    return make_routable_component_id(id, get_active_routing_region(ctx));
 }
 
-static routable_node_id const null_node_id;
+static routable_component_id const null_component_id;
 
-// Is the given routable_node_id valid?
-// (Only the null_node_id is invalid.)
+// Is the given routable_component_id valid?
+// (Only the null_component_id is invalid.)
 inline bool
-is_valid(routable_node_id const& id)
+is_valid(routable_component_id const& id)
 {
     return id.id != nullptr;
 }
 
 struct targeted_event
 {
-    node_id target_id;
+    component_id target_id;
 };
 
 template<class Event>
 void
-dispatch_targeted_event(system& sys, Event& event, routable_node_id const& id)
+dispatch_targeted_event(
+    system& sys, Event& event, routable_component_id const& id)
 {
     event.target_id = id.id;
     impl::dispatch_targeted_event(sys, event, id.region);
@@ -4244,14 +4018,14 @@ dispatch_targeted_event(system& sys, Event& event, routable_node_id const& id)
 
 template<class Event>
 bool
-detect_targeted_event(dataless_context ctx, node_id id, Event** event)
+detect_targeted_event(dataless_context ctx, component_id id, Event** event)
 {
     return detect_event(ctx, event) && (*event)->target_id == id;
 }
 
 template<class Event, class Context, class Handler>
 void
-on_targeted_event(Context ctx, node_id id, Handler&& handler)
+on_targeted_event(Context ctx, component_id id, Handler&& handler)
 {
     Event* e;
     ALIA_UNTRACKED_IF(detect_targeted_event(ctx, id, &e))
@@ -4287,8 +4061,6 @@ on_refresh(Context ctx, Handler handler)
 }
 
 } // namespace alia
-
-
 
 namespace alia {
 
@@ -4425,12 +4197,12 @@ fake_writability(Wrapped const& wrapped)
 // the value type :Value. The proxy will apply static_casts to convert its
 // own values to and from :x's value type.
 template<class Wrapped, class To>
-struct signal_caster : regular_signal<
-                           signal_caster<Wrapped, To>,
-                           To,
-                           typename Wrapped::direction_tag>
+struct casting_signal : regular_signal<
+                            casting_signal<Wrapped, To>,
+                            To,
+                            typename Wrapped::direction_tag>
 {
-    signal_caster(Wrapped wrapped) : wrapped_(wrapped)
+    casting_signal(Wrapped wrapped) : wrapped_(wrapped)
     {
     }
     bool
@@ -4459,11 +4231,32 @@ struct signal_caster : regular_signal<
     Wrapped wrapped_;
     lazy_reader<To> lazy_reader_;
 };
-template<class To, class Wrapped>
-signal_caster<Wrapped, To>
-signal_cast(Wrapped const& wrapped)
+// Don't use a casting_signal if the value type is the same.
+template<class Wrapped, class To>
+struct signal_caster
 {
-    return signal_caster<Wrapped, To>(wrapped);
+    typedef casting_signal<Wrapped, To> type;
+    static type
+    apply(Wrapped wrapped)
+    {
+        return type(wrapped);
+    }
+};
+template<class Wrapped>
+struct signal_caster<Wrapped, typename Wrapped::value_type>
+{
+    typedef Wrapped type;
+    static type
+    apply(Wrapped wrapped)
+    {
+        return wrapped;
+    }
+};
+template<class To, class Wrapped>
+typename signal_caster<Wrapped, To>::type
+signal_cast(Wrapped wrapped)
+{
+    return signal_caster<Wrapped, To>::apply(wrapped);
 }
 
 // has_value(x) yields a signal to a boolean which indicates whether or not :x
@@ -4783,202 +4576,60 @@ disable_writes(Signal s)
     return mask_writes(s, false);
 }
 
-} // namespace alia
-
-
-#include <cmath>
-
-namespace alia {
-
-// The following are interpolation curves that can be used for animations.
-typedef unit_cubic_bezier animation_curve;
-animation_curve const default_curve = {0.25, 0.1, 0.25, 1};
-animation_curve const linear_curve = {0, 0, 1, 1};
-animation_curve const ease_in_curve = {0.42, 0, 1, 1};
-animation_curve const ease_out_curve = {0, 0, 0.58, 1};
-animation_curve const ease_in_out_curve = {0.42, 0, 0.58, 1};
-
-// animated_transition specifies an animated transition from one state to
-// another, defined by a duration and a curve to follow.
-struct animated_transition
-{
-    animation_curve curve;
-    millisecond_count duration;
-};
-animated_transition const default_transition = {default_curve, 400};
-
-// A value_smoother is used to create smoothly changing views of values that
-// actually change abruptly.
-template<class Value>
-struct value_smoother
-{
-    bool initialized = false, in_transition;
-    millisecond_count duration, transition_end;
-    Value old_value, new_value;
-};
-
-// value_smoother requires the ability to interpolate the values it works with.
-// If the value type supplies addition and multiplication by scalers, then it
-// can be interpolated using the default implementation below. Another option
-// is to simply implement a compatible interpolate function directly for the
-// value type.
-
-// interpolate(a, b, factor) yields a * (1 - factor) + b * factor
-template<class Value>
-std::enable_if_t<!std::is_integral<Value>::value, Value>
-interpolate(Value const& a, Value const& b, double factor)
-{
-    return a * (1 - factor) + b * factor;
-}
-// Overload it for floats to eliminate warnings about conversions.
-static inline float
-interpolate(float a, float b, double factor)
-{
-    return float(a * (1 - factor) + b * factor);
-}
-// Overload it for integers to add rounding (and eliminate warnings).
-template<class Integer>
-std::enable_if_t<std::is_integral<Integer>::value, Integer>
-interpolate(Integer a, Integer b, double factor)
-{
-    return Integer(std::round(a * (1 - factor) + b * factor));
-}
-
-// reset_smoothing(smoother, value) causes the smoother to transition abruptly
-// to the value specified.
-template<class Value>
-void
-reset_smoothing(value_smoother<Value>& smoother, Value const& value)
-{
-    smoother.in_transition = false;
-    smoother.new_value = value;
-    smoother.initialized = true;
-}
-
-// smooth_raw(ctx, smoother, x, transition) returns a smoothed view of x.
-template<class Value>
-Value
-smooth_raw(
-    dataless_context ctx,
-    value_smoother<Value>& smoother,
-    Value const& x,
-    animated_transition const& transition = default_transition)
-{
-    if (!smoother.initialized)
-        reset_smoothing(smoother, x);
-    Value current_value = smoother.new_value;
-    if (smoother.in_transition)
-    {
-        millisecond_count ticks_left
-            = get_raw_animation_ticks_left(ctx, smoother.transition_end);
-        if (ticks_left > 0)
-        {
-            double fraction = eval_curve_at_x(
-                transition.curve,
-                1. - double(ticks_left) / smoother.duration,
-                1. / smoother.duration);
-            current_value
-                = interpolate(smoother.old_value, smoother.new_value, fraction);
-        }
-        else
-            smoother.in_transition = false;
-    }
-    if (is_refresh_event(ctx) && x != smoother.new_value)
-    {
-        smoother.duration =
-            // If we're just going back to the old value, go back in the same
-            // amount of time it took to get here.
-            smoother.in_transition && x == smoother.old_value
-                ? (transition.duration
-                   - get_raw_animation_ticks_left(ctx, smoother.transition_end))
-                : transition.duration;
-        smoother.transition_end
-            = get_raw_animation_tick_count(ctx) + smoother.duration;
-        smoother.old_value = current_value;
-        smoother.new_value = x;
-        smoother.in_transition = true;
-    }
-    return current_value;
-}
-
-// smooth is analogous to smooth_raw, but it deals with signals instead of raw
-// values.
-
+// unwrap(signal), where :signal is a signal carrying a std::optional value,
+// yields a signal that directly carries the value wrapped inside the optional.
 template<class Wrapped>
-struct smoothed_signal : regular_signal<
-                             smoothed_signal<Wrapped>,
-                             typename Wrapped::value_type,
-                             read_only_signal>
+struct unwrapper_signal : signal<
+                              unwrapper_signal<Wrapped>,
+                              typename Wrapped::value_type::value_type,
+                              typename Wrapped::direction_tag>
 {
-    smoothed_signal(
-        Wrapped wrapped, typename Wrapped::value_type smoothed_value)
-        : wrapped_(wrapped), smoothed_value_(smoothed_value)
+    unwrapper_signal()
     {
     }
-    id_interface const&
-    value_id() const
+    unwrapper_signal(Wrapped wrapped) : wrapped_(wrapped)
     {
-        if (wrapped_.has_value())
-        {
-            id_ = make_id(smoothed_value_);
-            return id_;
-        }
-        else
-            return null_id;
     }
     bool
     has_value() const
     {
-        return wrapped_.has_value();
+        return wrapped_.has_value() && wrapped_.read().has_value();
     }
-    typename Wrapped::value_type const&
+    typename Wrapped::value_type::value_type const&
     read() const
     {
-        return smoothed_value_;
+        return wrapped_.read().value();
+    }
+    id_interface const&
+    value_id() const
+    {
+        if (this->has_value())
+            return wrapped_.value_id();
+        else
+            return null_id;
+    }
+    bool
+    ready_to_write() const
+    {
+        return wrapped_.ready_to_write();
+    }
+    void
+    write(typename Wrapped::value_type::value_type const& value) const
+    {
+        wrapped_.write(value);
     }
 
  private:
     Wrapped wrapped_;
-    typename Wrapped::value_type smoothed_value_;
-    mutable simple_id<typename Wrapped::value_type> id_;
 };
-template<class Wrapped>
-smoothed_signal<Wrapped>
-make_smoothed_signal(
-    Wrapped wrapped, typename Wrapped::value_type smoothed_value)
-{
-    return smoothed_signal<Wrapped>(wrapped, smoothed_value);
-}
-
-template<class Value, class Signal>
-auto
-smooth(
-    dataless_context ctx,
-    value_smoother<Value>& smoother,
-    Signal x,
-    animated_transition const& transition = default_transition)
-{
-    Value output = Value();
-    if (signal_has_value(x))
-        output = smooth_raw(ctx, smoother, read_signal(x), transition);
-    return make_smoothed_signal(x, output);
-}
-
 template<class Signal>
 auto
-smooth(
-    context ctx,
-    Signal x,
-    animated_transition const& transition = default_transition)
+unwrap(Signal signal)
 {
-    value_smoother<typename Signal::value_type>* data;
-    get_cached_data(ctx, &data);
-    return smooth(ctx, *data, x, transition);
+    return unwrapper_signal<Signal>(signal);
 }
 
 } // namespace alia
-
-
 
 namespace alia {
 
@@ -5221,155 +4872,6 @@ lift(Function f)
 
 } // namespace alia
 
-
-
-namespace alia {
-
-// state_holder<Value> is designed to be stored persistently as actual
-// application state. Signals for it will track changes in it and report its ID
-// based on that.
-template<class Value>
-struct state_holder
-{
-    state_holder() : version_(0)
-    {
-    }
-
-    explicit state_holder(Value value) : value_(std::move(value)), version_(1)
-    {
-    }
-
-    bool
-    is_initialized() const
-    {
-        return version_ != 0;
-    }
-
-    Value const&
-    get() const
-    {
-        return value_;
-    }
-
-    unsigned
-    version() const
-    {
-        return version_;
-    }
-
-    void
-    set(Value value)
-    {
-        value_ = std::move(value);
-        ++version_;
-    }
-
-    // If you REALLY need direct, non-const access to the underlying state,
-    // you can use this. It returns a non-const reference to the value and
-    // increments the version number (assuming you'll make some changes).
-    //
-    // Note that you should be careful to use this atomically. In other words,
-    // call this to get a reference, do your update, and then discard the
-    // reference before anyone else observes the state. If you hold onto the
-    // reference and continue making changes while other alia code is accessing
-    // it, they'll end up with outdated views of the state.
-    //
-    // Also note that if you call this on an uninitialized state, you're
-    // expected to initialize it.
-    //
-    Value&
-    nonconst_get()
-    {
-        ++version_;
-        return value_;
-    }
-
- private:
-    Value value_;
-    // version_ is incremented for each change in the value of the state.
-    // If this is 0, the state is considered uninitialized.
-    unsigned version_;
-};
-
-template<class Value>
-struct state_signal : signal<state_signal<Value>, Value, duplex_signal>
-{
-    explicit state_signal(state_holder<Value>* s) : state_(s)
-    {
-    }
-
-    bool
-    has_value() const
-    {
-        return state_->is_initialized();
-    }
-
-    Value const&
-    read() const
-    {
-        return state_->get();
-    }
-
-    simple_id<unsigned> const&
-    value_id() const
-    {
-        id_ = make_id(state_->version());
-        return id_;
-    }
-
-    bool
-    ready_to_write() const
-    {
-        return true;
-    }
-
-    void
-    write(Value const& value) const
-    {
-        state_->set(value);
-    }
-
- private:
-    state_holder<Value>* state_;
-    mutable simple_id<unsigned> id_;
-};
-
-template<class Value>
-state_signal<Value>
-make_state_signal(state_holder<Value>& state)
-{
-    return state_signal<Value>(&state);
-}
-
-// get_state(ctx, initial_value) returns a signal carrying some persistent local
-// state whose initial value is determined by the :initial_value signal. The
-// returned signal will not have a value until :initial_value has one or one is
-// explicitly written to the state signal.
-template<class Context, class InitialValue>
-auto
-get_state(Context ctx, InitialValue const& initial_value)
-{
-    auto initial_value_signal = signalize(initial_value);
-
-    state_holder<typename decltype(initial_value_signal)::value_type>* state;
-    get_data(ctx, &state);
-
-    if (!state->is_initialized() && signal_has_value(initial_value_signal))
-        state->set(read_signal(initial_value_signal));
-
-    return make_state_signal(*state);
-}
-
-} // namespace alia
-
-
-#include <map>
-#include <utility>
-#include <vector>
-
-
-
-
 // This file defines the operators for signals.
 
 namespace alia {
@@ -5390,7 +4892,7 @@ ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(+)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(-)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(*)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(/)
-ALIA_DEFINE_BINARY_SIGNAL_OPERATOR (^)
+ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(^)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(%)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(&)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(|)
@@ -5432,7 +4934,7 @@ ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(+)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(-)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(*)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(/)
-ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR (^)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(^)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(%)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(&)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(|)
@@ -6067,7 +5569,6 @@ auto signal_base<Derived, Value, Direction>::operator[](Index index) const
 
 } // namespace alia
 
-
 namespace alia {
 
 // is_map_like<Container>::value yields a compile-time boolean indicating
@@ -6255,6 +5756,148 @@ for_each(Context ctx, ContainerSignal const& container_signal, Fn&& fn)
 
 } // namespace alia
 
+namespace alia {
+
+enum class async_status
+{
+    UNREADY,
+    LAUNCHED,
+    COMPLETE,
+    FAILED
+};
+
+template<class Value>
+struct async_operation_data
+{
+    counter_type version = 0;
+    Value result;
+    async_status status = async_status::UNREADY;
+};
+
+template<class Value>
+void
+reset(async_operation_data<Value>& data)
+{
+    if (data.status != async_status::UNREADY)
+    {
+        ++data.version;
+        data.status = async_status::UNREADY;
+    }
+}
+
+template<class Value>
+struct async_signal : signal<async_signal<Value>, Value, read_only_signal>
+{
+    async_signal(async_operation_data<Value>& data) : data_(&data)
+    {
+    }
+    id_interface const&
+    value_id() const
+    {
+        id_ = make_id(data_->version);
+        return id_;
+    }
+    bool
+    has_value() const
+    {
+        return data_->status == async_status::COMPLETE;
+    }
+    Value const&
+    read() const
+    {
+        return data_->result;
+    }
+
+ private:
+    async_operation_data<Value>* data_;
+    mutable simple_id<counter_type> id_;
+};
+
+template<class Value>
+async_signal<Value>
+make_async_signal(async_operation_data<Value>& data)
+{
+    return async_signal<Value>(data);
+}
+
+template<class Result>
+void
+process_async_args(context, async_operation_data<Result>&, bool&)
+{
+}
+template<class Result, class Arg, class... Rest>
+void
+process_async_args(
+    context ctx,
+    async_operation_data<Result>& data,
+    bool& args_ready,
+    Arg const& arg,
+    Rest const&... rest)
+{
+    captured_id* cached_id;
+    get_cached_data(ctx, &cached_id);
+    if (is_refresh_event(ctx))
+    {
+        if (!signal_has_value(arg))
+        {
+            reset(data);
+            args_ready = false;
+        }
+        else if (!cached_id->matches(arg.value_id()))
+        {
+            reset(data);
+            cached_id->capture(arg.value_id());
+        }
+    }
+    process_async_args(ctx, data, args_ready, rest...);
+}
+
+template<class Result, class Context, class Launcher, class... Args>
+auto
+async(Context ctx, Launcher launcher, Args const&... args)
+{
+    std::shared_ptr<async_operation_data<Result>>& data_ptr
+        = get_cached_data<std::shared_ptr<async_operation_data<Result>>>(ctx);
+    if (!data_ptr)
+        data_ptr.reset(new async_operation_data<Result>);
+    auto& data = *data_ptr;
+
+    bool args_ready = true;
+    process_async_args(ctx, data, args_ready, args...);
+
+    on_refresh(ctx, [&](auto ctx) {
+        if (data.status == async_status::UNREADY && args_ready)
+        {
+            auto* system = &get<system_tag>(ctx);
+            auto version = data.version;
+            auto report_result = [system, version, data_ptr](Result result) {
+                auto& data = *data_ptr;
+                if (data.version == version)
+                {
+                    data.result = std::move(result);
+                    data.status = async_status::COMPLETE;
+                }
+                refresh_system(*system);
+            };
+            try
+            {
+                launcher(ctx, report_result, read_signal(args)...);
+            }
+            catch (...)
+            {
+                data.status = async_status::FAILED;
+            }
+        }
+    });
+
+    return make_async_signal(data);
+}
+
+} // namespace alia
+
+#include <map>
+#include <utility>
+#include <vector>
 
 namespace alia {
 
@@ -6478,8 +6121,6 @@ transform(Context ctx, Container const& container, Function&& f)
 }
 
 } // namespace alia
-
-
 
 // This file defines utilities for constructing custom signals via lambda
 // functions.
@@ -6829,149 +6470,7 @@ always_ready()
 
 } // namespace alia
 
-
-
-namespace alia {
-
-enum class async_status
-{
-    UNREADY,
-    LAUNCHED,
-    COMPLETE,
-    FAILED
-};
-
-template<class Value>
-struct async_operation_data
-{
-    counter_type version = 0;
-    Value result;
-    async_status status = async_status::UNREADY;
-};
-
-template<class Value>
-void
-reset(async_operation_data<Value>& data)
-{
-    if (data.status != async_status::UNREADY)
-    {
-        ++data.version;
-        data.status = async_status::UNREADY;
-    }
-}
-
-template<class Value>
-struct async_signal : signal<async_signal<Value>, Value, read_only_signal>
-{
-    async_signal(async_operation_data<Value>& data) : data_(&data)
-    {
-    }
-    id_interface const&
-    value_id() const
-    {
-        id_ = make_id(data_->version);
-        return id_;
-    }
-    bool
-    has_value() const
-    {
-        return data_->status == async_status::COMPLETE;
-    }
-    Value const&
-    read() const
-    {
-        return data_->result;
-    }
-
- private:
-    async_operation_data<Value>* data_;
-    mutable simple_id<counter_type> id_;
-};
-
-template<class Value>
-async_signal<Value>
-make_async_signal(async_operation_data<Value>& data)
-{
-    return async_signal<Value>(data);
-}
-
-template<class Result>
-void
-process_async_args(context, async_operation_data<Result>&, bool&)
-{
-}
-template<class Result, class Arg, class... Rest>
-void
-process_async_args(
-    context ctx,
-    async_operation_data<Result>& data,
-    bool& args_ready,
-    Arg const& arg,
-    Rest const&... rest)
-{
-    captured_id* cached_id;
-    get_cached_data(ctx, &cached_id);
-    if (is_refresh_event(ctx))
-    {
-        if (!signal_has_value(arg))
-        {
-            reset(data);
-            args_ready = false;
-        }
-        else if (!cached_id->matches(arg.value_id()))
-        {
-            reset(data);
-            cached_id->capture(arg.value_id());
-        }
-    }
-    process_async_args(ctx, data, args_ready, rest...);
-}
-
-template<class Result, class Context, class Launcher, class... Args>
-auto
-async(Context ctx, Launcher launcher, Args const&... args)
-{
-    std::shared_ptr<async_operation_data<Result>>& data_ptr
-        = get_cached_data<std::shared_ptr<async_operation_data<Result>>>(ctx);
-    if (!data_ptr)
-        data_ptr.reset(new async_operation_data<Result>);
-    auto& data = *data_ptr;
-
-    bool args_ready = true;
-    process_async_args(ctx, data, args_ready, args...);
-
-    on_refresh(ctx, [&](auto ctx) {
-        if (data.status == async_status::UNREADY && args_ready)
-        {
-            auto* system = &get<system_tag>(ctx);
-            auto version = data.version;
-            auto report_result = [system, version, data_ptr](Result result) {
-                auto& data = *data_ptr;
-                if (data.version == version)
-                {
-                    data.result = std::move(result);
-                    data.status = async_status::COMPLETE;
-                }
-                refresh_system(*system);
-            };
-            try
-            {
-                launcher(ctx, report_result, read_signal(args)...);
-            }
-            catch (...)
-            {
-                data.status = async_status::FAILED;
-            }
-        }
-    });
-
-    return make_async_signal(data);
-}
-
-} // namespace alia
-
-
-
+#include <cmath>
 
 // This file defines some numerical adaptors for signals.
 
@@ -7129,7 +6628,144 @@ round_signal_writes(N n, Step step)
 
 } // namespace alia
 
+namespace alia {
 
+// state_holder<Value> is designed to be stored persistently as actual
+// application state. Signals for it will track changes in it and report its ID
+// based on that.
+template<class Value>
+struct state_holder
+{
+    state_holder() : version_(0)
+    {
+    }
+
+    explicit state_holder(Value value) : value_(std::move(value)), version_(1)
+    {
+    }
+
+    bool
+    is_initialized() const
+    {
+        return version_ != 0;
+    }
+
+    Value const&
+    get() const
+    {
+        return value_;
+    }
+
+    unsigned
+    version() const
+    {
+        return version_;
+    }
+
+    void
+    set(Value value)
+    {
+        value_ = std::move(value);
+        ++version_;
+    }
+
+    // If you REALLY need direct, non-const access to the underlying state,
+    // you can use this. It returns a non-const reference to the value and
+    // increments the version number (assuming you'll make some changes).
+    //
+    // Note that you should be careful to use this atomically. In other words,
+    // call this to get a reference, do your update, and then discard the
+    // reference before anyone else observes the state. If you hold onto the
+    // reference and continue making changes while other alia code is accessing
+    // it, they'll end up with outdated views of the state.
+    //
+    // Also note that if you call this on an uninitialized state, you're
+    // expected to initialize it.
+    //
+    Value&
+    nonconst_get()
+    {
+        ++version_;
+        return value_;
+    }
+
+ private:
+    Value value_;
+    // version_ is incremented for each change in the value of the state.
+    // If this is 0, the state is considered uninitialized.
+    unsigned version_;
+};
+
+template<class Value>
+struct state_signal : signal<state_signal<Value>, Value, duplex_signal>
+{
+    explicit state_signal(state_holder<Value>* s) : state_(s)
+    {
+    }
+
+    bool
+    has_value() const
+    {
+        return state_->is_initialized();
+    }
+
+    Value const&
+    read() const
+    {
+        return state_->get();
+    }
+
+    simple_id<unsigned> const&
+    value_id() const
+    {
+        id_ = make_id(state_->version());
+        return id_;
+    }
+
+    bool
+    ready_to_write() const
+    {
+        return true;
+    }
+
+    void
+    write(Value const& value) const
+    {
+        state_->set(value);
+    }
+
+ private:
+    state_holder<Value>* state_;
+    mutable simple_id<unsigned> id_;
+};
+
+template<class Value>
+state_signal<Value>
+make_state_signal(state_holder<Value>& state)
+{
+    return state_signal<Value>(&state);
+}
+
+// get_state(ctx, initial_value) returns a signal carrying some persistent local
+// state whose initial value is determined by the :initial_value signal. The
+// returned signal will not have a value until :initial_value has one or one is
+// explicitly written to the state signal.
+template<class Context, class InitialValue>
+auto
+get_state(Context ctx, InitialValue const& initial_value)
+{
+    auto initial_value_signal = signalize(initial_value);
+
+    state_holder<typename decltype(initial_value_signal)::value_type>* state;
+    get_data(ctx, &state);
+
+    if (!state->is_initialized() && signal_has_value(initial_value_signal))
+        state->set(read_signal(initial_value_signal));
+
+    return make_state_signal(*state);
+}
+
+} // namespace alia
 
 #include <cstdio>
 
@@ -7336,34 +6972,760 @@ as_duplex_text(context ctx, Signal x)
 
 } // namespace alia
 
-#ifdef ALIA_IMPLEMENTATION
+namespace alia {
 
-#include <chrono>
+// Currently, alia's only sense of time is that of a monotonically increasing
+// millisecond counter. It's understood to have an arbitrary start point and is
+// allowed to wrap around, so 'unsigned' is considered sufficient.
+typedef unsigned millisecond_count;
 
+struct timing_subsystem
+{
+    millisecond_count tick_counter = 0;
+};
+
+// Request that the UI context refresh again quickly enough for smooth
+// animation.
+void
+schedule_animation_refresh(dataless_context ctx);
+
+// Get the value of the millisecond tick counter associated with the given
+// UI context. This counter is updated every refresh pass, so it's consistent
+// within a single frame.
+// When this is called, it's assumed that something is currently animating, so
+// it also requests a refresh.
+millisecond_count
+get_raw_animation_tick_count(dataless_context ctx);
+
+// Same as above, but returns a signal rather than a raw integer.
+value_signal<millisecond_count>
+get_animation_tick_count(dataless_context ctx);
+
+// Get the number of ticks remaining until the given end time.
+// If the time has passed, this returns 0.
+// This ensures that the UI context refreshes until the end time is reached.
+millisecond_count
+get_raw_animation_ticks_left(dataless_context ctx, millisecond_count end_tick);
+
+struct animation_timer_state
+{
+    bool active = false;
+    millisecond_count end_tick;
+};
+
+struct raw_animation_timer
+{
+    raw_animation_timer(context ctx) : ctx_(ctx)
+    {
+        get_cached_data(ctx, &state_);
+        update();
+    }
+    raw_animation_timer(dataless_context ctx, animation_timer_state& state)
+        : ctx_(ctx), state_(&state)
+    {
+        update();
+    }
+    bool
+    is_active() const
+    {
+        return state_->active;
+    }
+    millisecond_count
+    ticks_left() const
+    {
+        return ticks_left_;
+    }
+    void
+    start(millisecond_count duration)
+    {
+        state_->active = true;
+        state_->end_tick = get_raw_animation_tick_count(ctx_) + duration;
+    }
+
+ private:
+    void
+    update()
+    {
+        if (state_->active)
+        {
+            ticks_left_ = get_raw_animation_ticks_left(ctx_, state_->end_tick);
+            if (ticks_left_ == 0)
+                state_->active = false;
+        }
+        else
+        {
+            ticks_left_ = 0;
+        }
+    }
+
+    dataless_context ctx_;
+    animation_timer_state* state_;
+    millisecond_count ticks_left_;
+};
+
+struct animation_timer
+{
+    animation_timer(context ctx) : raw_(ctx)
+    {
+    }
+    animation_timer(dataless_context ctx, animation_timer_state& state)
+        : raw_(ctx, state)
+    {
+    }
+    auto
+    is_active() const
+    {
+        return value(raw_.is_active());
+    }
+    auto
+    ticks_left() const
+    {
+        return value(raw_.ticks_left());
+    }
+    auto
+    start()
+    {
+        return lambda_action(
+            [&](millisecond_count duration) { raw_.start(duration); });
+    }
+
+ private:
+    raw_animation_timer raw_;
+};
+
+} // namespace alia
+
+// This file defines the default implementation for tracking timer events.
 
 namespace alia {
 
-millisecond_count
-get_default_tick_count()
+struct timer_event_request
 {
-    static auto start = std::chrono::steady_clock::now();
-    auto now = std::chrono::steady_clock::now();
-    return std::chrono::duration_cast<
-               std::chrono::duration<millisecond_count, std::milli>>(
-               now - start)
-        .count();
-}
+    millisecond_count trigger_time;
+    routable_component_id component;
+    unsigned frame_issued;
+};
+
+struct timer_event_scheduler
+{
+    std::vector<timer_event_request> requests;
+    unsigned frame_counter = 0;
+};
+
+// Schedule an event.
+void
+schedule_event(
+    timer_event_scheduler& scheduler,
+    routable_component_id component,
+    millisecond_count time);
+
+// Issue any events that are ready to be issued.
+void
+issue_ready_events(
+    timer_event_scheduler& scheduler,
+    millisecond_count now,
+    function_view<void(
+        routable_component_id component, millisecond_count time)> const& issue);
+
+// Are there any scheduled events?
+bool
+has_scheduled_events(timer_event_scheduler const& scheduler);
+
+// Get the time until the next scheduled event.
+// The behavior is undefined if there are no scheduled events.
+millisecond_count
+get_time_until_next_event(
+    timer_event_scheduler& scheduler, millisecond_count now);
+
+} // namespace alia
+
+namespace alia {
+
+struct system;
+
+struct external_interface
+{
+    virtual ~external_interface()
+    {
+    }
+
+    // Get the current value of the system's millisecond tick counter.
+    // (The default implementation uses std::chrono::steady_clock.)
+    virtual millisecond_count
+    get_tick_count() const = 0;
+
+    // alia calls this every frame when an animation is in progress that's using
+    // alia's internal animation timing system.
+    //
+    // If this system isn't already refreshing continuously, this requests that
+    // it refresh again within a reasonable animation time frame.
+    //
+    // (You can also call system_needs_refresh (see below) to test if a refresh
+    // is necessary.)
+    //
+    virtual void
+    schedule_animation_refresh()
+        = 0;
+
+    // Schedule a timer event to be delivered to a specific component at some
+    // future time.
+    //
+    // :id is the ID of the component that the event should be delivered to.
+    //
+    // :time is the tick count at which the event should be delivered.
+    //
+    // alia provides an internal system for tracking outstanding requests for
+    // timer events. If this system is continuously updating anyway, you can
+    // leave this unimplemented and call process_internal_timing_events
+    // once per frame to handle timing events. (See below.)
+    //
+    virtual void
+    schedule_timer_event(
+        routable_component_id component, millisecond_count time)
+        = 0;
+};
+
+struct default_external_interface : external_interface
+{
+    system& owner;
+
+    default_external_interface(system& owner) : owner(owner)
+    {
+    }
+
+    virtual millisecond_count
+    get_tick_count() const;
+
+    void
+    schedule_animation_refresh()
+    {
+    }
+
+    void
+    schedule_timer_event(
+        routable_component_id component, millisecond_count time);
+};
+
+struct system : noncopyable
+{
+    data_graph data;
+    std::function<void(context)> controller;
+    bool refresh_needed = false;
+    std::unique_ptr<external_interface> external;
+    timer_event_scheduler scheduler;
+};
 
 void
-refresh_system(system& sys)
-{
-    sys.refresh_needed = false;
+initialize_system(
+    system& sys,
+    std::function<void(context)> const& controller,
+    external_interface* external = nullptr);
 
-    refresh_event refresh;
-    impl::dispatch_event(sys, refresh);
+// timer event
+struct timer_event : targeted_event
+{
+    millisecond_count trigger_time;
+};
+
+// If this system is using internal timer event scheduling, this will check for
+// any events that are ready to be issued and issue them.
+void
+process_internal_timing_events(system& sys, millisecond_count now);
+
+} // namespace alia
+
+namespace alia {
+
+// unit_cubic_bezier represents a cubic bezier whose end points are (0, 0)
+// and (1, 1).
+struct unit_cubic_bezier
+{
+    double p1x, p1y, p2x, p2y;
+};
+
+// unit_cubic_bezier_coefficients describes a unit cubic bezier curve by the
+// coefficients in its parametric equation form.
+struct unit_cubic_bezier_coefficients
+{
+    double ax, ay, bx, by, cx, cy;
+};
+
+unit_cubic_bezier_coefficients
+compute_curve_coefficients(unit_cubic_bezier const& bezier);
+
+// Solve for t at a point x in a unit cubic curve.
+// This should only be called on curves that are expressible in y = f(x) form.
+double
+solve_for_t_at_x(
+    unit_cubic_bezier_coefficients const& coeff,
+    double x,
+    double error_tolerance);
+
+// This is the same as above but always uses a bisection search.
+// It's simple but likely slower and is primarily exposed for testing purposes.
+double
+solve_for_t_at_x_with_bisection_search(
+    unit_cubic_bezier_coefficients const& coeff,
+    double x,
+    double error_tolerance);
+
+// Evaluate a unit_cubic_bezier at the given x value.
+// Since this is an approximation, the caller must specify a tolerance value
+// to control the error in the result.
+double
+eval_curve_at_x(
+    unit_cubic_bezier const& curve, double x, double error_tolerance);
+
+} // namespace alia
+
+// This file defines the interface to timer events in alia.
+
+namespace alia {
+
+struct timer_data : component_identity
+{
+    bool active = false;
+    millisecond_count expected_trigger_time;
+};
+
+struct raw_timer
+{
+    raw_timer(context ctx) : ctx_(ctx)
+    {
+        get_cached_data(ctx, &data_);
+        update();
+    }
+    raw_timer(dataless_context ctx, timer_data& data) : ctx_(ctx), data_(&data)
+    {
+        update();
+    }
+
+    bool
+    is_active() const
+    {
+        return data_->active;
+    }
+
+    void
+    start(millisecond_count duration);
+
+    void
+    stop()
+    {
+        data_->active = false;
+    }
+
+    bool
+    is_triggered()
+    {
+        return triggered_;
+    }
+
+ private:
+    void
+    update();
+
+    dataless_context ctx_;
+    timer_data* data_;
+    bool triggered_;
+};
+
+} // namespace alia
+
+namespace alia {
+
+// The following is a small utility used for deflickering...
+
+template<class Value>
+struct captured_value
+{
+    bool valid = false;
+    Value value;
+    captured_id id;
+};
+
+template<class Value>
+void
+clear(captured_value<Value>& captured)
+{
+    captured.valid = false;
+    captured.id.clear();
+}
+
+template<class Value, class Signal>
+void
+capture(captured_value<Value>& captured, Signal const& signal)
+{
+    captured.value = signal.read();
+    captured.id.capture(signal.value_id());
+    captured.valid = true;
+}
+
+// deflicker(ctx, x, delay) returns a deflickered version of the signal :x.
+//
+// Whenever :x has a value, the deflickered signal carries the same value.
+// Whenever :x loses its value, the deflickered signal retains the old value for
+// a period of time, given by :delay. (If a new value arrives on :x during this
+// period, it will pick that up instead.)
+//
+// :delay is specified in milliseconds and can be either a raw value or a
+// signal. It defaults to 250 ms.
+//
+
+unsigned const default_deflicker_delay = 250;
+
+template<class Value>
+struct deflickering_data
+{
+    timer_data timer;
+    captured_value<Value> captured;
+};
+
+template<class Wrapped>
+struct deflickering_signal : signal<
+                                 deflickering_signal<Wrapped>,
+                                 typename Wrapped::value_type,
+                                 typename Wrapped::direction_tag>
+{
+    deflickering_signal()
+    {
+    }
+    deflickering_signal(
+        Wrapped wrapped, captured_value<typename Wrapped::value_type>& captured)
+        : wrapped_(wrapped), captured_(captured)
+    {
+    }
+    bool
+    has_value() const
+    {
+        return captured_.valid;
+    }
+    typename Wrapped::value_type const&
+    read() const
+    {
+        return captured_.value;
+    }
+    id_interface const&
+    value_id() const
+    {
+        return captured_.id.is_initialized() ? captured_.id.get() : null_id;
+    }
+    bool
+    ready_to_write() const
+    {
+        return wrapped_.ready_to_write();
+    }
+    void
+    write(typename Wrapped::value_type const& value) const
+    {
+        wrapped_.write(value);
+    }
+
+ private:
+    Wrapped wrapped_;
+    captured_value<typename Wrapped::value_type>& captured_;
+};
+
+template<class Signal, class Value, class Delay = millisecond_count>
+deflickering_signal<Signal>
+deflicker(
+    dataless_context ctx,
+    deflickering_data<Value>& data,
+    Signal x,
+    Delay delay = default_deflicker_delay)
+{
+    auto delay_signal = signalize(delay);
+
+    raw_timer timer(ctx, data.timer);
+    if (timer.is_triggered())
+    {
+        // If the timer is triggered, it means we were holding a stale value and
+        // it's time to clear it out.
+        clear(data.captured);
+        abort_traversal(ctx);
+    }
+
+    on_refresh(ctx, [&](auto) {
+        if (x.has_value())
+        {
+            if (x.value_id() != data.captured.id)
+            {
+                // :x is carrying a different value than the one we have
+                // captured, so capture the new one.
+                capture(data.captured, x);
+                // If we had an active timer, stop it.
+                timer.stop();
+            }
+        }
+        else
+        {
+            if (data.captured.id.is_initialized() && !timer.is_active())
+            {
+                // :x has no value, and this is apparently the first time we've
+                // noticed that, so start the timer.
+                if (signal_has_value(delay_signal))
+                {
+                    timer.start(read_signal(delay_signal));
+                }
+                else
+                {
+                    // If the delay isn't readable, we can't start the timer, so
+                    // just drop the value immediately.
+                    clear(data.captured);
+                }
+            }
+        }
+    });
+
+    return deflickering_signal<Signal>(x, data.captured);
+}
+
+template<class Signal, class Delay = millisecond_count>
+deflickering_signal<Signal>
+deflicker(context ctx, Signal x, Delay delay = default_deflicker_delay)
+{
+    typedef typename Signal::value_type value_type;
+    auto& data = get_cached_data<deflickering_data<value_type>>(ctx);
+    return deflicker(ctx, data, x, delay);
 }
 
 } // namespace alia
+
+namespace alia {
+
+// The following are interpolation curves that can be used for animations.
+typedef unit_cubic_bezier animation_curve;
+animation_curve const default_curve = {0.25, 0.1, 0.25, 1};
+animation_curve const linear_curve = {0, 0, 1, 1};
+animation_curve const ease_in_curve = {0.42, 0, 1, 1};
+animation_curve const ease_out_curve = {0, 0, 0.58, 1};
+animation_curve const ease_in_out_curve = {0.42, 0, 0.58, 1};
+
+// animated_transition specifies an animated transition from one state to
+// another, defined by a duration and a curve to follow.
+struct animated_transition
+{
+    animation_curve curve;
+    millisecond_count duration;
+};
+animated_transition const default_transition = {default_curve, 250};
+
+// A value_smoother is used to create smoothly changing views of values that
+// actually change abruptly.
+template<class Value>
+struct value_smoother
+{
+    bool initialized = false, in_transition;
+    millisecond_count duration, transition_end;
+    Value old_value, new_value;
+};
+
+// value_smoother requires the ability to interpolate the values it works with.
+// If the value type supplies addition and multiplication by scalers, then it
+// can be interpolated using the default implementation below. Another option
+// is to simply implement a compatible interpolate function directly for the
+// value type.
+
+// interpolate(a, b, factor) yields a * (1 - factor) + b * factor
+template<class Value>
+std::enable_if_t<!std::is_integral<Value>::value, Value>
+interpolate(Value const& a, Value const& b, double factor)
+{
+    return a * (1 - factor) + b * factor;
+}
+// Overload it for floats to eliminate warnings about conversions.
+static inline float
+interpolate(float a, float b, double factor)
+{
+    return float(a * (1 - factor) + b * factor);
+}
+// Overload it for integers to add rounding (and eliminate warnings).
+template<class Integer>
+std::enable_if_t<std::is_integral<Integer>::value, Integer>
+interpolate(Integer a, Integer b, double factor)
+{
+    return Integer(std::round(a * (1 - factor) + b * factor));
+}
+
+// reset_smoothing(smoother, value) causes the smoother to transition abruptly
+// to the value specified.
+template<class Value>
+void
+reset_smoothing(value_smoother<Value>& smoother, Value const& value)
+{
+    smoother.in_transition = false;
+    smoother.new_value = value;
+    smoother.initialized = true;
+}
+
+// smooth_raw(ctx, smoother, x, transition) returns a smoothed view of x.
+template<class Value>
+Value
+smooth_raw(
+    dataless_context ctx,
+    value_smoother<Value>& smoother,
+    Value const& x,
+    animated_transition const& transition = default_transition)
+{
+    if (!smoother.initialized)
+        reset_smoothing(smoother, x);
+    Value current_value = smoother.new_value;
+    if (smoother.in_transition)
+    {
+        millisecond_count ticks_left
+            = get_raw_animation_ticks_left(ctx, smoother.transition_end);
+        if (ticks_left > 0)
+        {
+            double fraction = eval_curve_at_x(
+                transition.curve,
+                1. - double(ticks_left) / smoother.duration,
+                1. / smoother.duration);
+            current_value
+                = interpolate(smoother.old_value, smoother.new_value, fraction);
+        }
+        else
+            smoother.in_transition = false;
+    }
+    if (is_refresh_event(ctx) && x != smoother.new_value)
+    {
+        smoother.duration =
+            // If we're just going back to the old value, go back in the same
+            // amount of time it took to get here.
+            smoother.in_transition && x == smoother.old_value
+                ? (transition.duration
+                   - get_raw_animation_ticks_left(ctx, smoother.transition_end))
+                : transition.duration;
+        smoother.transition_end
+            = get_raw_animation_tick_count(ctx) + smoother.duration;
+        smoother.old_value = current_value;
+        smoother.new_value = x;
+        smoother.in_transition = true;
+    }
+    return current_value;
+}
+
+// smooth is analogous to smooth_raw, but it deals with signals instead of raw
+// values.
+
+template<class Wrapped>
+struct smoothed_signal : regular_signal<
+                             smoothed_signal<Wrapped>,
+                             typename Wrapped::value_type,
+                             read_only_signal>
+{
+    smoothed_signal(
+        Wrapped wrapped, typename Wrapped::value_type smoothed_value)
+        : wrapped_(wrapped), smoothed_value_(smoothed_value)
+    {
+    }
+    id_interface const&
+    value_id() const
+    {
+        if (wrapped_.has_value())
+        {
+            id_ = make_id(smoothed_value_);
+            return id_;
+        }
+        else
+            return null_id;
+    }
+    bool
+    has_value() const
+    {
+        return wrapped_.has_value();
+    }
+    typename Wrapped::value_type const&
+    read() const
+    {
+        return smoothed_value_;
+    }
+
+ private:
+    Wrapped wrapped_;
+    typename Wrapped::value_type smoothed_value_;
+    mutable simple_id<typename Wrapped::value_type> id_;
+};
+template<class Wrapped>
+smoothed_signal<Wrapped>
+make_smoothed_signal(
+    Wrapped wrapped, typename Wrapped::value_type smoothed_value)
+{
+    return smoothed_signal<Wrapped>(wrapped, smoothed_value);
+}
+
+template<class Value, class Signal>
+auto
+smooth(
+    dataless_context ctx,
+    value_smoother<Value>& smoother,
+    Signal x,
+    animated_transition const& transition = default_transition)
+{
+    Value output = Value();
+    if (signal_has_value(x))
+        output = smooth_raw(ctx, smoother, read_signal(x), transition);
+    return make_smoothed_signal(x, output);
+}
+
+template<class Signal>
+auto
+smooth(
+    context ctx,
+    Signal x,
+    animated_transition const& transition = default_transition)
+{
+    value_smoother<typename Signal::value_type>* data;
+    get_cached_data(ctx, &data);
+    return smooth(ctx, *data, x, transition);
+}
+
+} // namespace alia
+
+namespace alia {
+
+namespace impl {
+
+value_signal<bool>
+square_wave(
+    context ctx,
+    readable<millisecond_count> true_duration,
+    readable<millisecond_count> false_duration);
+
+}
+
+// Generates a square wave.
+//
+// The returned signal alternates between true and false as time passes.
+//
+// The two duration parameters specify how long (in milliseconds) the signal
+// remains at each value during a single cycle.
+//
+// Both durations can be either signals or raw values.
+//
+// If :false_duration doesn't have a value (or is omitted), :true_duration is
+// used in its place.
+//
+// If :true_duration doesn't have a value, the square wave will stop
+// alternating.
+//
+template<
+    class TrueDuration,
+    class FalseDuration = empty_signal<millisecond_count>>
+value_signal<bool>
+square_wave(
+    context ctx,
+    TrueDuration true_duration,
+    FalseDuration false_duration = empty<millisecond_count>())
+{
+    return impl::square_wave(
+        ctx,
+        signal_cast<millisecond_count>(signalize(true_duration)),
+        signal_cast<millisecond_count>(signalize(false_duration)));
+}
+
+} // namespace alia
+
+#ifdef ALIA_IMPLEMENTATION
 #include <typeinfo>
 
 namespace alia {
@@ -7435,299 +7797,21 @@ operator<(captured_id const& a, captured_id const& b)
 
 } // namespace alia
 
-
 namespace alia {
 
-namespace {
-
-double
-sample_curve_x(unit_cubic_bezier_coefficients const& coeff, double t)
+context
+make_context(
+    context_storage* storage,
+    system& sys,
+    event_traversal& event,
+    data_traversal& data,
+    timing_subsystem& timing)
 {
-    return ((coeff.ax * t + coeff.bx) * t + coeff.cx) * t;
-}
-
-double
-sample_curve_y(unit_cubic_bezier_coefficients const& coeff, double t)
-{
-    return ((coeff.ay * t + coeff.by) * t + coeff.cy) * t;
-}
-
-double
-sample_curve_derivative(unit_cubic_bezier_coefficients const& coeff, double t)
-{
-    return (3 * coeff.ax * t + 2 * coeff.bx) * t + coeff.cx;
-}
-
-} // namespace
-
-unit_cubic_bezier_coefficients
-compute_curve_coefficients(unit_cubic_bezier const& bezier)
-{
-    unit_cubic_bezier_coefficients coeff;
-    coeff.cx = 3 * bezier.p1x;
-    coeff.bx = 3 * (bezier.p2x - bezier.p1x) - coeff.cx;
-    coeff.ax = 1 - coeff.cx - coeff.bx;
-    coeff.cy = 3 * bezier.p1y;
-    coeff.by = 3 * (bezier.p2y - bezier.p1y) - coeff.cy;
-    coeff.ay = 1 - coeff.cy - coeff.by;
-    return coeff;
-}
-
-double
-solve_for_t_at_x_with_bisection_search(
-    unit_cubic_bezier_coefficients const& coeff,
-    double x,
-    double error_tolerance)
-{
-    double lower = 0.0;
-    double upper = 1.0;
-    double t = x;
-    while (true)
-    {
-        double x_at_t = sample_curve_x(coeff, t);
-        if (std::fabs(x_at_t - x) < error_tolerance)
-            return t;
-        if (x > x_at_t)
-            lower = t;
-        else
-            upper = t;
-        t = (lower + upper) / 2;
-    }
-}
-
-double
-solve_for_t_at_x(
-    unit_cubic_bezier_coefficients const& coeff,
-    double x,
-    double error_tolerance)
-{
-    // Newton's method should be faster, so try that first.
-    double t = x;
-    for (int i = 0; i != 8; ++i)
-    {
-        double x_error = sample_curve_x(coeff, t) - x;
-        if (std::fabs(x_error) < error_tolerance)
-            return t;
-        double dx = sample_curve_derivative(coeff, t);
-        if (std::fabs(dx) < 1e-6)
-            break;
-        t -= x_error / dx;
-    }
-
-    // If that fails, fallback to a bisection search.
-    return solve_for_t_at_x_with_bisection_search(coeff, x, error_tolerance);
-}
-
-double
-eval_curve_at_x(unit_cubic_bezier const& curve, double x, double epsilon)
-{
-    if (x <= 0)
-        return 0;
-    if (x >= 1)
-        return 1;
-
-    auto coeff = compute_curve_coefficients(curve);
-
-    return sample_curve_y(coeff, solve_for_t_at_x(coeff, x, epsilon));
-}
-
-} // namespace alia
-
-
-namespace alia {
-
-void
-request_animation_refresh(dataless_context ctx)
-{
-    // Invoke the virtual method on the external system interface.
-    // And also set a flag to indicate that a refresh is needed.
-    system& sys = ctx.get<system_tag>();
-    if (!sys.refresh_needed)
-    {
-        if (sys.external)
-            sys.external->request_animation_refresh();
-        sys.refresh_needed = true;
-    }
-}
-
-millisecond_count
-get_raw_animation_tick_count(dataless_context ctx)
-{
-    request_animation_refresh(ctx);
-    return ctx.get<timing_tag>().tick_counter;
-}
-
-value_signal<millisecond_count>
-get_animation_tick_count(dataless_context ctx)
-{
-    return value(get_raw_animation_tick_count(ctx));
-}
-
-millisecond_count
-get_raw_animation_ticks_left(dataless_context ctx, millisecond_count end_time)
-{
-    int ticks_remaining = int(end_time - ctx.get<timing_tag>().tick_counter);
-    if (ticks_remaining > 0)
-    {
-        if (is_refresh_event(ctx))
-            request_animation_refresh(ctx);
-        return millisecond_count(ticks_remaining);
-    }
-    return 0;
-}
-
-} // namespace alia
-
-
-namespace alia {
-
-template<class T>
-bool
-string_to_value(std::string const& str, T* value)
-{
-    std::istringstream s(str);
-    T x;
-    if (!(s >> x))
-        return false;
-    s >> std::ws;
-    if (s.eof())
-    {
-        *value = x;
-        return true;
-    }
-    return false;
-}
-
-template<class T>
-std::string
-value_to_string(T const& value)
-{
-    std::ostringstream s;
-    s << value;
-    return s.str();
-}
-
-template<class T>
-void
-float_from_string(T* value, std::string const& str)
-{
-    if (!string_to_value(str, value))
-        throw validation_error("This input expects a number.");
-}
-
-#define ALIA_FLOAT_CONVERSIONS(T)                                              \
-    void from_string(T* value, std::string const& str)                         \
-    {                                                                          \
-        float_from_string(value, str);                                         \
-    }                                                                          \
-    std::string to_string(T value)                                             \
-    {                                                                          \
-        return value_to_string(value);                                         \
-    }
-
-ALIA_FLOAT_CONVERSIONS(float)
-ALIA_FLOAT_CONVERSIONS(double)
-
-template<class T>
-void
-signed_integer_from_string(T* value, std::string const& str)
-{
-    long long n;
-    if (!string_to_value(str, &n))
-        throw validation_error("This input expects an integer.");
-    T x = T(n);
-    if (x != n)
-        throw validation_error("This integer is outside the supported range.");
-    *value = x;
-}
-
-template<class T>
-void
-unsigned_integer_from_string(T* value, std::string const& str)
-{
-    unsigned long long n;
-    if (!string_to_value(str, &n))
-        throw validation_error("This input expects an integer.");
-    T x = T(n);
-    if (x != n)
-        throw validation_error("This integer is outside the supported range.");
-    *value = x;
-}
-
-#define ALIA_SIGNED_INTEGER_CONVERSIONS(T)                                     \
-    void from_string(T* value, std::string const& str)                         \
-    {                                                                          \
-        signed_integer_from_string(value, str);                                \
-    }                                                                          \
-    std::string to_string(T value)                                             \
-    {                                                                          \
-        return value_to_string(value);                                         \
-    }
-
-#define ALIA_UNSIGNED_INTEGER_CONVERSIONS(T)                                   \
-    void from_string(T* value, std::string const& str)                         \
-    {                                                                          \
-        unsigned_integer_from_string(value, str);                              \
-    }                                                                          \
-    std::string to_string(T value)                                             \
-    {                                                                          \
-        return value_to_string(value);                                         \
-    }
-
-ALIA_SIGNED_INTEGER_CONVERSIONS(short int)
-ALIA_UNSIGNED_INTEGER_CONVERSIONS(unsigned short int)
-ALIA_SIGNED_INTEGER_CONVERSIONS(int)
-ALIA_UNSIGNED_INTEGER_CONVERSIONS(unsigned int)
-ALIA_SIGNED_INTEGER_CONVERSIONS(long int)
-ALIA_UNSIGNED_INTEGER_CONVERSIONS(unsigned long int)
-ALIA_SIGNED_INTEGER_CONVERSIONS(long long int)
-ALIA_UNSIGNED_INTEGER_CONVERSIONS(unsigned long long int)
-
-void
-from_string(std::string* value, std::string const& str)
-{
-    *value = str;
-}
-std::string
-to_string(std::string value)
-{
-    return value;
-}
-
-} // namespace alia
-
-namespace alia {
-
-if_block::if_block(data_traversal& traversal, bool condition)
-{
-    data_block& block = get_data<data_block>(traversal);
-    if (condition)
-    {
-        scoped_data_block_.begin(traversal, block);
-    }
-    else if (traversal.cache_clearing_enabled)
-    {
-        clear_cached_data(block);
-    }
-}
-
-loop_block::loop_block(data_traversal& traversal)
-{
-    traversal_ = &traversal;
-    get_data(traversal, &block_);
-}
-loop_block::~loop_block()
-{
-    // The current block is the one we were expecting to use for the next
-    // iteration, but since the destructor is being invoked, there won't be a
-    // next iteration, which means we should clear out that block.
-    if (!std::uncaught_exception())
-        clear_data_block(*block_);
-}
-void
-loop_block::next()
-{
-    get_data(*traversal_, &block_);
+    return make_context(impl::make_empty_structural_collection(storage))
+        .add<system_tag>(sys)
+        .add<event_traversal_tag>(event)
+        .add<timing_tag>(timing)
+        .add<data_traversal_tag>(data);
 }
 
 } // namespace alia
@@ -8165,7 +8249,6 @@ scoped_data_traversal::end()
 
 } // namespace alia
 
-
 namespace alia {
 
 void
@@ -8226,8 +8309,7 @@ invoke_controller(system& sys, event_traversal& events)
     data.gc_enabled = data.cache_clearing_enabled = is_refresh;
 
     timing_subsystem timing;
-    timing.tick_counter = sys.external ? sys.external->get_tick_count()
-                                       : get_default_tick_count();
+    timing.tick_counter = sys.external->get_tick_count();
 
     context_storage storage;
     context ctx = make_context(&storage, sys, events, data, timing);
@@ -8279,23 +8361,549 @@ void abort_traversal(dataless_context)
 
 } // namespace alia
 
+namespace alia {
+
+if_block::if_block(data_traversal& traversal, bool condition)
+{
+    data_block& block = get_data<data_block>(traversal);
+    if (condition)
+    {
+        scoped_data_block_.begin(traversal, block);
+    }
+    else if (traversal.cache_clearing_enabled)
+    {
+        clear_cached_data(block);
+    }
+}
+
+loop_block::loop_block(data_traversal& traversal)
+{
+    traversal_ = &traversal;
+    get_data(traversal, &block_);
+}
+loop_block::~loop_block()
+{
+    // The current block is the one we were expecting to use for the next
+    // iteration, but since the destructor is being invoked, there won't be a
+    // next iteration, which means we should clear out that block.
+    if (!std::uncaught_exception())
+        clear_data_block(*block_);
+}
+void
+loop_block::next()
+{
+    get_data(*traversal_, &block_);
+}
+
+} // namespace alia
 
 namespace alia {
 
-context
-make_context(
-    context_storage* storage,
-    system& sys,
-    event_traversal& event,
-    data_traversal& data,
-    timing_subsystem& timing)
+template<class T>
+bool
+string_to_value(std::string const& str, T* value)
 {
-    return make_context(impl::make_empty_structural_collection(storage))
-        .add<system_tag>(sys)
-        .add<event_traversal_tag>(event)
-        .add<timing_tag>(timing)
-        .add<data_traversal_tag>(data);
+    std::istringstream s(str);
+    T x;
+    if (!(s >> x))
+        return false;
+    s >> std::ws;
+    if (s.eof())
+    {
+        *value = x;
+        return true;
+    }
+    return false;
 }
+
+template<class T>
+std::string
+value_to_string(T const& value)
+{
+    std::ostringstream s;
+    s << value;
+    return s.str();
+}
+
+template<class T>
+void
+float_from_string(T* value, std::string const& str)
+{
+    if (!string_to_value(str, value))
+        throw validation_error("This input expects a number.");
+}
+
+#define ALIA_FLOAT_CONVERSIONS(T)                                              \
+    void from_string(T* value, std::string const& str)                         \
+    {                                                                          \
+        float_from_string(value, str);                                         \
+    }                                                                          \
+    std::string to_string(T value)                                             \
+    {                                                                          \
+        return value_to_string(value);                                         \
+    }
+
+ALIA_FLOAT_CONVERSIONS(float)
+ALIA_FLOAT_CONVERSIONS(double)
+
+template<class T>
+void
+signed_integer_from_string(T* value, std::string const& str)
+{
+    long long n;
+    if (!string_to_value(str, &n))
+        throw validation_error("This input expects an integer.");
+    T x = T(n);
+    if (x != n)
+        throw validation_error("This integer is outside the supported range.");
+    *value = x;
+}
+
+template<class T>
+void
+unsigned_integer_from_string(T* value, std::string const& str)
+{
+    unsigned long long n;
+    if (!string_to_value(str, &n))
+        throw validation_error("This input expects an integer.");
+    T x = T(n);
+    if (x != n)
+        throw validation_error("This integer is outside the supported range.");
+    *value = x;
+}
+
+#define ALIA_SIGNED_INTEGER_CONVERSIONS(T)                                     \
+    void from_string(T* value, std::string const& str)                         \
+    {                                                                          \
+        signed_integer_from_string(value, str);                                \
+    }                                                                          \
+    std::string to_string(T value)                                             \
+    {                                                                          \
+        return value_to_string(value);                                         \
+    }
+
+#define ALIA_UNSIGNED_INTEGER_CONVERSIONS(T)                                   \
+    void from_string(T* value, std::string const& str)                         \
+    {                                                                          \
+        unsigned_integer_from_string(value, str);                              \
+    }                                                                          \
+    std::string to_string(T value)                                             \
+    {                                                                          \
+        return value_to_string(value);                                         \
+    }
+
+ALIA_SIGNED_INTEGER_CONVERSIONS(short int)
+ALIA_UNSIGNED_INTEGER_CONVERSIONS(unsigned short int)
+ALIA_SIGNED_INTEGER_CONVERSIONS(int)
+ALIA_UNSIGNED_INTEGER_CONVERSIONS(unsigned int)
+ALIA_SIGNED_INTEGER_CONVERSIONS(long int)
+ALIA_UNSIGNED_INTEGER_CONVERSIONS(unsigned long int)
+ALIA_SIGNED_INTEGER_CONVERSIONS(long long int)
+ALIA_UNSIGNED_INTEGER_CONVERSIONS(unsigned long long int)
+
+void
+from_string(std::string* value, std::string const& str)
+{
+    *value = str;
+}
+std::string
+to_string(std::string value)
+{
+    return value;
+}
+
+} // namespace alia
+
+#include <chrono>
+
+namespace alia {
+
+bool
+system_needs_refresh(system const& sys)
+{
+    return sys.refresh_needed;
+}
+
+void
+refresh_system(system& sys)
+{
+    sys.refresh_needed = false;
+
+    refresh_event refresh;
+    impl::dispatch_event(sys, refresh);
+}
+
+} // namespace alia
+
+namespace alia {
+
+millisecond_count
+default_external_interface::get_tick_count() const
+{
+    static auto start = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    return std::chrono::duration_cast<
+               std::chrono::duration<millisecond_count, std::milli>>(
+               now - start)
+        .count();
+}
+
+void
+default_external_interface::schedule_timer_event(
+    routable_component_id component, millisecond_count time)
+{
+    schedule_event(owner.scheduler, component, time);
+}
+
+void
+initialize_system(
+    system& sys,
+    std::function<void(context)> const& controller,
+    external_interface* external)
+{
+    sys.controller = controller;
+    sys.external.reset(
+        external ? external : new default_external_interface(sys));
+}
+
+void
+process_internal_timing_events(system& sys, millisecond_count now)
+{
+    issue_ready_events(
+        sys.scheduler,
+        now,
+        [&](routable_component_id component, millisecond_count trigger_time) {
+            timer_event event;
+            event.trigger_time = trigger_time;
+            dispatch_targeted_event(sys, event, component);
+        });
+}
+
+} // namespace alia
+
+namespace alia {
+
+namespace {
+
+double
+sample_curve_x(unit_cubic_bezier_coefficients const& coeff, double t)
+{
+    return ((coeff.ax * t + coeff.bx) * t + coeff.cx) * t;
+}
+
+double
+sample_curve_y(unit_cubic_bezier_coefficients const& coeff, double t)
+{
+    return ((coeff.ay * t + coeff.by) * t + coeff.cy) * t;
+}
+
+double
+sample_curve_derivative(unit_cubic_bezier_coefficients const& coeff, double t)
+{
+    return (3 * coeff.ax * t + 2 * coeff.bx) * t + coeff.cx;
+}
+
+} // namespace
+
+unit_cubic_bezier_coefficients
+compute_curve_coefficients(unit_cubic_bezier const& bezier)
+{
+    unit_cubic_bezier_coefficients coeff;
+    coeff.cx = 3 * bezier.p1x;
+    coeff.bx = 3 * (bezier.p2x - bezier.p1x) - coeff.cx;
+    coeff.ax = 1 - coeff.cx - coeff.bx;
+    coeff.cy = 3 * bezier.p1y;
+    coeff.by = 3 * (bezier.p2y - bezier.p1y) - coeff.cy;
+    coeff.ay = 1 - coeff.cy - coeff.by;
+    return coeff;
+}
+
+double
+solve_for_t_at_x_with_bisection_search(
+    unit_cubic_bezier_coefficients const& coeff,
+    double x,
+    double error_tolerance)
+{
+    double lower = 0.0;
+    double upper = 1.0;
+    double t = x;
+    while (true)
+    {
+        double x_at_t = sample_curve_x(coeff, t);
+        if (std::fabs(x_at_t - x) < error_tolerance)
+            return t;
+        if (x > x_at_t)
+            lower = t;
+        else
+            upper = t;
+        t = (lower + upper) / 2;
+    }
+}
+
+double
+solve_for_t_at_x(
+    unit_cubic_bezier_coefficients const& coeff,
+    double x,
+    double error_tolerance)
+{
+    // Newton's method should be faster, so try that first.
+    double t = x;
+    for (int i = 0; i != 8; ++i)
+    {
+        double x_error = sample_curve_x(coeff, t) - x;
+        if (std::fabs(x_error) < error_tolerance)
+            return t;
+        double dx = sample_curve_derivative(coeff, t);
+        if (std::fabs(dx) < 1e-6)
+            break;
+        t -= x_error / dx;
+    }
+
+    // If that fails, fallback to a bisection search.
+    return solve_for_t_at_x_with_bisection_search(coeff, x, error_tolerance);
+}
+
+double
+eval_curve_at_x(unit_cubic_bezier const& curve, double x, double epsilon)
+{
+    if (x <= 0)
+        return 0;
+    if (x >= 1)
+        return 1;
+
+    auto coeff = compute_curve_coefficients(curve);
+
+    return sample_curve_y(coeff, solve_for_t_at_x(coeff, x, epsilon));
+}
+
+} // namespace alia
+
+namespace alia {
+
+void
+schedule_event(
+    timer_event_scheduler& scheduler,
+    routable_component_id component,
+    millisecond_count time)
+{
+    timer_event_request rq;
+    rq.component = component;
+    rq.trigger_time = time;
+    rq.frame_issued = scheduler.frame_counter;
+    scheduler.requests.push_back(rq);
+}
+
+void
+issue_ready_events(
+    timer_event_scheduler& scheduler,
+    millisecond_count now,
+    function_view<void(
+        routable_component_id component, millisecond_count time)> const& issue)
+{
+    ++scheduler.frame_counter;
+    while (true)
+    {
+        // Ideally, the list would be stored sorted, but it has to be
+        // sorted relative to the current tick count (to handle wrapping),
+        // and the list is generally not very long anyway.
+        auto next_event = scheduler.requests.end();
+        for (auto i = scheduler.requests.begin(); i != scheduler.requests.end();
+             ++i)
+        {
+            if (i->frame_issued != scheduler.frame_counter
+                && int(now - i->trigger_time) >= 0
+                && (next_event == scheduler.requests.end()
+                    || int(next_event->trigger_time - i->trigger_time) >= 0))
+            {
+                next_event = i;
+            }
+        }
+        if (next_event == scheduler.requests.end())
+            break;
+
+        timer_event_request request = *next_event;
+        scheduler.requests.erase(next_event);
+
+        issue(request.component, request.trigger_time);
+    }
+}
+
+bool
+has_scheduled_events(timer_event_scheduler const& scheduler)
+{
+    return !scheduler.requests.empty();
+}
+
+millisecond_count
+get_time_until_next_event(
+    timer_event_scheduler& scheduler, millisecond_count now)
+{
+    auto next_event = scheduler.requests.end();
+    for (auto i = scheduler.requests.begin(); i != scheduler.requests.end();
+         ++i)
+    {
+        if (next_event == scheduler.requests.end()
+            || int(next_event->trigger_time - i->trigger_time) >= 0)
+        {
+            next_event = i;
+        }
+    }
+    return int(next_event->trigger_time - now) >= 0
+               ? (next_event->trigger_time - now)
+               : 0;
+}
+
+} // namespace alia
+
+namespace alia {
+
+void
+schedule_animation_refresh(dataless_context ctx)
+{
+    // Invoke the virtual method on the external system interface.
+    // And also set a flag to indicate that a refresh is needed.
+    system& sys = ctx.get<system_tag>();
+    if (!sys.refresh_needed)
+    {
+        if (sys.external)
+            sys.external->schedule_animation_refresh();
+        sys.refresh_needed = true;
+    }
+}
+
+millisecond_count
+get_raw_animation_tick_count(dataless_context ctx)
+{
+    schedule_animation_refresh(ctx);
+    return ctx.get<timing_tag>().tick_counter;
+}
+
+value_signal<millisecond_count>
+get_animation_tick_count(dataless_context ctx)
+{
+    return value(get_raw_animation_tick_count(ctx));
+}
+
+millisecond_count
+get_raw_animation_ticks_left(dataless_context ctx, millisecond_count end_time)
+{
+    int ticks_remaining = int(end_time - ctx.get<timing_tag>().tick_counter);
+    if (ticks_remaining > 0)
+    {
+        if (is_refresh_event(ctx))
+            schedule_animation_refresh(ctx);
+        return millisecond_count(ticks_remaining);
+    }
+    return 0;
+}
+
+} // namespace alia
+
+namespace alia {
+
+void
+schedule_timer_event(
+    dataless_context ctx, component_id id, millisecond_count trigger_time)
+{
+    auto& sys = get<system_tag>(ctx);
+    sys.external->schedule_timer_event(
+        make_routable_component_id(ctx, id), trigger_time);
+}
+
+bool
+detect_timer_event(dataless_context ctx, timer_data& data)
+{
+    timer_event* event;
+    return detect_targeted_event(ctx, &data, &event)
+           && event->trigger_time == data.expected_trigger_time;
+}
+
+void
+start_timer(dataless_context ctx, timer_data& data, millisecond_count duration)
+{
+    auto now = ctx.get<timing_tag>().tick_counter;
+    auto trigger_time = now + duration;
+    data.expected_trigger_time = trigger_time;
+    schedule_timer_event(ctx, &data, trigger_time);
+}
+
+void
+restart_timer(
+    dataless_context ctx, timer_data& data, millisecond_count duration)
+{
+    timer_event* event;
+    bool detected = detect_event(ctx, &event);
+    assert(detected);
+    if (detected)
+    {
+        auto trigger_time = event->trigger_time + duration;
+        data.expected_trigger_time = trigger_time;
+        schedule_timer_event(ctx, &data, trigger_time);
+    }
+}
+
+void
+raw_timer::update()
+{
+    triggered_ = data_->active && detect_timer_event(ctx_, *data_);
+    if (triggered_)
+        data_->active = false;
+}
+
+void
+raw_timer::start(unsigned duration)
+{
+    if (triggered_)
+        restart_timer(ctx_, *data_, duration);
+    else
+        start_timer(ctx_, *data_, duration);
+    data_->active = true;
+}
+
+} // namespace alia
+
+namespace alia {
+
+namespace impl {
+
+struct square_wave_data
+{
+    bool value = true;
+    timer_data timer;
+};
+
+value_signal<bool>
+square_wave(
+    context ctx,
+    readable<millisecond_count> true_duration,
+    readable<millisecond_count> false_duration)
+{
+    auto& data = get_cached_data<square_wave_data>(ctx);
+
+    raw_timer timer(ctx, data.timer);
+
+    if (timer.is_triggered())
+        data.value = !data.value;
+
+    if (!timer.is_active())
+    {
+        auto duration = conditional(
+            data.value,
+            true_duration,
+            add_fallback(false_duration, true_duration));
+        if (signal_has_value(duration))
+        {
+            timer.start(read_signal(duration));
+        }
+    }
+
+    if (timer.is_triggered())
+        abort_traversal(ctx);
+
+    return value(data.value);
+}
+
+} // namespace impl
 
 } // namespace alia
 #endif

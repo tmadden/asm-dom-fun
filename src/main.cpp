@@ -98,10 +98,25 @@ do_ui(dom::context ctx)
 
     auto color = get_state(ctx, value(rgb8(0, 0, 0)));
 
-    do_button(ctx, "black"_a, color <<= value(rgb8(50, 50, 55)));
-    do_button(ctx, "white"_a, color <<= value(rgb8(230, 230, 255)));
+    {
+        scoped_div buttons(ctx, value("button-container"));
+        do_button(ctx, "black"_a, color <<= value(rgb8(50, 50, 55)));
+        do_button(ctx, "white"_a, color <<= value(rgb8(230, 230, 255)));
+    }
 
     do_colored_box(ctx, smooth(ctx, color));
+
+    auto write_mask = get_state(ctx, true);
+    do_switch(ctx, write_mask);
+
+    auto state = get_state(ctx, empty<bool>());
+    do_button(ctx, "Initialize!", state <<= false);
+    do_switch(ctx, mask_writes(state, write_mask));
+    do_colored_box(
+        ctx,
+        smooth(
+            ctx,
+            conditional(state, value(rgb8(50, 50, 55)), rgb8(230, 230, 255))));
 
     ////
 

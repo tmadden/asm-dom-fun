@@ -14,6 +14,7 @@ using namespace alia;
 struct context_info
 {
     asmdom::Children* current_children;
+    std::string js_code;
 };
 ALIA_DEFINE_TAGGED_TYPE(context_info_tag, context_info&)
 
@@ -49,6 +50,9 @@ do_input(dom::context ctx, Signal signal)
 {
     do_input_(ctx, as_duplex_text(ctx, signal));
 }
+
+void
+do_switch(dom::context ctx, duplex<bool> value);
 
 void
 do_button_(dom::context ctx, readable<std::string> text, action<> on_click);
@@ -108,21 +112,11 @@ do_div(
     do_contents(ctx);
 }
 
-struct dom_external_interface : alia::external_interface
-{
-    alia::system* system;
-
-    void
-    request_animation_refresh();
-};
-
 struct system
 {
     std::function<void(dom::context)> controller;
 
     asmdom::VNode* current_view = nullptr;
-
-    dom_external_interface external;
 
     alia::system alia_system;
 
