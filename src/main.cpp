@@ -107,11 +107,11 @@ do_ui(dom::context ctx)
     do_colored_box(ctx, smooth(ctx, color));
 
     auto write_mask = get_state(ctx, true);
-    do_switch(ctx, write_mask);
+    do_checkbox(ctx, write_mask);
 
     auto state = get_state(ctx, empty<bool>());
     do_button(ctx, "Initialize!", state <<= false);
-    do_switch(ctx, mask_writes(state, write_mask));
+    do_checkbox(ctx, mask_writes(state, write_mask));
     do_colored_box(
         ctx,
         smooth(
@@ -328,10 +328,16 @@ do_tip_calculator(dom::context ctx)
 //     refresh();
 // }
 
+void
+do_nav_ui(dom::context ctx)
+{
+    do_link(ctx, "Just Testing", lambda_action([] {}));
+}
+
 int
 main()
 {
-    initialize(the_dom, the_system, "root", do_ui);
+    initialize(the_dom, the_system, "nav-root", do_nav_ui);
 
     // // Fetch some data.
     // emscripten_fetch_attr_t attr;

@@ -9,8 +9,8 @@
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
 //
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
 //
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// alia.hpp - (local) - generated 2020-04-15T17:22:36-04:00
+// alia.hpp - (local) - generated 2020-05-08T14:45:08-04:00
 
 #ifndef ALIA_CORE_HPP
 #define ALIA_CORE_HPP
@@ -144,6 +144,7 @@ class function_view<Return(Args...)> final
 };
 
 } // namespace alia
+
 
 #include <functional>
 #include <sstream>
@@ -570,8 +571,13 @@ static simple_id<unit_id_type*> const unit_id(nullptr);
 
 } // namespace alia
 
+
+
 #include <typeindex>
 #include <unordered_map>
+
+
+
 
 // This file provides the underlying type mechanics that allow for defining the
 // context of an application as an arbitrary collection of data from disparate
@@ -1183,6 +1189,7 @@ get_tagged_data(Collection collection)
 
 } // namespace alia
 
+
 namespace alia {
 
 namespace impl {
@@ -1347,6 +1354,9 @@ struct tagged_data_accessor
 } // namespace impl
 
 } // namespace alia
+
+
+
 
 // This file defines the core types and functions of the signals module.
 
@@ -1739,6 +1749,8 @@ struct validation_error : exception
 
 } // namespace alia
 
+
+
 // This file defines various utilities for working with signals.
 // (These are mostly meant to be used internally.)
 
@@ -1900,6 +1912,7 @@ refresh_signal_shadow(
 }
 
 } // namespace alia
+
 
 // This file defines various utilities for constructing basic signals.
 
@@ -2099,6 +2112,8 @@ direct(Value const& x)
 
 } // namespace alia
 
+
+
 namespace alia {
 
 struct data_traversal;
@@ -2289,7 +2304,65 @@ get_data_traversal(Context ctx)
     return ctx.template get<data_traversal_tag>();
 }
 
+template<class Context>
+struct optional_context
+{
+    optional_context() : ctx_(typename Context::contents_type(nullptr))
+    {
+    }
+
+    bool
+    has_value() const
+    {
+        return ctx_.contents_.storage != nullptr;
+    }
+
+    explicit operator bool() const
+    {
+        return has_value();
+    }
+
+    Context const operator*() const
+    {
+        assert(has_value());
+        return ctx_;
+    }
+    Context operator*()
+    {
+        assert(has_value());
+        return ctx_;
+    }
+
+    Context const* operator->() const
+    {
+        assert(has_value());
+        return &ctx_;
+    }
+    Context* operator->()
+    {
+        assert(has_value());
+        return &ctx_;
+    }
+
+    void
+    reset(Context ctx)
+    {
+        ctx_ = ctx;
+    }
+
+    void
+    reset()
+    {
+        ctx_ = Context(typename Context::contents_type(nullptr));
+    }
+
+ private:
+    Context ctx_;
+};
+
 } // namespace alia
+
+
 
 // This file defines the alia action interface, some common implementations of
 // it, and some utilities for working with it.
@@ -2676,6 +2749,93 @@ lambda_action(Perform perform)
 }
 
 } // namespace alia
+
+
+
+namespace alia {
+
+struct component_container;
+
+typedef std::shared_ptr<component_container> component_container_ptr;
+
+struct component_container
+{
+    component_container_ptr parent;
+    // The component is dirty and needs to be refreshed immediately.
+    bool dirty = false;
+    // The component is animating and would like to be refreshed soon.
+    bool animating = false;
+};
+
+void
+mark_dirty_component(component_container_ptr const& container);
+
+void
+mark_dirty_component(dataless_context ctx);
+
+void
+mark_animating_component(component_container_ptr const& container);
+
+void
+mark_animating_component(dataless_context ctx);
+
+struct scoped_component_container
+{
+    scoped_component_container()
+    {
+    }
+    scoped_component_container(context ctx)
+    {
+        begin(ctx);
+    }
+    scoped_component_container(context ctx, component_container_ptr* container)
+    {
+        begin(ctx, container);
+    }
+    ~scoped_component_container()
+    {
+        end();
+    }
+
+    void
+    begin(dataless_context ctx, component_container_ptr* container);
+
+    void
+    begin(context ctx);
+
+    void
+    end();
+
+    bool
+    is_on_route() const
+    {
+        return is_on_route_;
+    }
+
+    bool
+    is_dirty() const
+    {
+        return is_dirty_;
+    }
+
+    bool
+    is_animating() const
+    {
+        return is_animating_;
+    }
+
+ private:
+    optional_context<dataless_context> ctx_;
+    component_container_ptr* container_;
+    component_container_ptr* parent_;
+    bool is_on_route_;
+    bool is_dirty_;
+    bool is_animating_;
+};
+
+} // namespace alia
+
+
 
 // This file defines the data retrieval library used for associating mutable
 // state and cached data with alia content graphs. It is designed so that each
@@ -3400,6 +3560,9 @@ struct scoped_data_traversal
 
 } // namespace alia
 
+
+
+
 namespace alia {
 
 // The following are utilities that are used to implement the control flow
@@ -3786,6 +3949,7 @@ read_condition(T const& x)
 
 } // namespace alia
 
+
 namespace alia {
 
 struct system;
@@ -3797,6 +3961,7 @@ void
 refresh_system(system& sys);
 
 } // namespace alia
+
 
 // This file implements utilities for routing events through an alia content
 // traversal function.
@@ -3819,51 +3984,46 @@ refresh_system(system& sys);
 namespace alia {
 
 struct system;
-struct routing_region;
-
-typedef std::shared_ptr<routing_region> routing_region_ptr;
-
-struct routing_region
-{
-    routing_region_ptr parent;
-};
 
 struct event_routing_path
 {
-    routing_region* node;
+    component_container* node;
     event_routing_path* rest;
 };
 
 struct event_traversal
 {
-    routing_region_ptr* active_region = 0;
+    component_container_ptr* active_container = nullptr;
     bool targeted;
-    event_routing_path* path_to_target = 0;
+    event_routing_path* path_to_target = nullptr;
     std::type_info const* event_type;
     void* event;
+    bool aborted = false;
 };
 
 template<class Context>
-routing_region_ptr
-get_active_routing_region(Context ctx)
+component_container_ptr const&
+get_active_component_container(Context ctx)
 {
-    event_traversal& traversal = get_event_traversal(ctx);
-    return traversal.active_region ? *traversal.active_region
-                                   : routing_region_ptr();
+    return *get_event_traversal(ctx).active_container;
 }
 
 namespace impl {
 
 // Set up the event traversal so that it will route the control flow to the
 // given target. (And also invoke the traversal.)
-// :target can be null, in which case no (further) routing will be done.
+//
+// :target can be null, in which case the event will be routed through the
+// entire component tree.
+//
 void
-route_event(system& sys, event_traversal& traversal, routing_region* target);
+route_event(
+    system& sys, event_traversal& traversal, component_container* target);
 
 template<class Event>
 void
 dispatch_targeted_event(
-    system& sys, Event& event, routing_region_ptr const& target)
+    system& sys, Event& event, component_container_ptr const& target)
 {
     event_traversal traversal;
     traversal.targeted = true;
@@ -3880,7 +4040,7 @@ dispatch_event(system& sys, Event& event)
     traversal.targeted = false;
     traversal.event_type = &typeid(Event);
     traversal.event = &event;
-    route_event(sys, traversal, 0);
+    route_event(sys, traversal, nullptr);
 }
 
 } // namespace impl
@@ -3893,44 +4053,18 @@ dispatch_event(system& sys, Event& event)
     refresh_system(sys);
 }
 
-struct traversal_aborted
+struct traversal_abortion
 {
 };
 
 void
 abort_traversal(dataless_context ctx);
 
-struct scoped_routing_region
+inline bool
+traversal_aborted(dataless_context ctx)
 {
-    scoped_routing_region() : traversal_(0)
-    {
-    }
-    scoped_routing_region(context ctx)
-    {
-        begin(ctx);
-    }
-    ~scoped_routing_region()
-    {
-        end();
-    }
-
-    void
-    begin(context ctx);
-
-    void
-    end();
-
-    bool
-    is_relevant() const
-    {
-        return is_relevant_;
-    }
-
- private:
-    event_traversal* traversal_;
-    routing_region_ptr* parent_;
-    bool is_relevant_;
-};
+    return get_event_traversal(ctx).aborted;
+}
 
 template<class Event>
 bool
@@ -3957,48 +4091,41 @@ on_event(Context ctx, Handler&& handler)
     ALIA_END
 }
 
-struct component_identity
-{
-};
-typedef component_identity const* component_id;
+typedef component_container_ptr component_identity;
 
-inline component_id
-get_component_id(context ctx)
-{
-    return &get_cached_data<component_identity>(ctx);
-}
+typedef component_identity* component_id;
 
-// routable_component_id identifies a node with enough information that an event
-// can be routed to it.
-struct routable_component_id
+void
+refresh_component_identity(dataless_context ctx, component_identity& identity);
+
+component_id
+get_component_id(context ctx);
+
+// external_component_id identifies a component in a form that can be safely
+// stored outside of the alia data graph.
+struct external_component_id
 {
     component_id id = nullptr;
-    routing_region_ptr region;
+    component_identity identity;
 };
 
-inline routable_component_id
-make_routable_component_id(component_id id, routing_region_ptr region)
-{
-    routable_component_id routable;
-    routable.id = id;
-    routable.region = region;
-    return routable;
-}
+static external_component_id const null_component_id;
 
-inline routable_component_id
-make_routable_component_id(dataless_context ctx, component_id id)
-{
-    return make_routable_component_id(id, get_active_routing_region(ctx));
-}
-
-static routable_component_id const null_component_id;
-
-// Is the given routable_component_id valid?
+// Is the given external_component_id valid?
 // (Only the null_component_id is invalid.)
 inline bool
-is_valid(routable_component_id const& id)
+is_valid(external_component_id const& id)
 {
     return id.id != nullptr;
+}
+
+inline external_component_id
+externalize(component_id id)
+{
+    external_component_id external;
+    external.id = id;
+    external.identity = *id;
+    return external;
 }
 
 struct targeted_event
@@ -4009,10 +4136,10 @@ struct targeted_event
 template<class Event>
 void
 dispatch_targeted_event(
-    system& sys, Event& event, routable_component_id const& id)
+    system& sys, Event& event, external_component_id component)
 {
-    event.target_id = id.id;
-    impl::dispatch_targeted_event(sys, event, id.region);
+    event.target_id = component.id;
+    impl::dispatch_targeted_event(sys, event, component.identity);
     refresh_system(sys);
 }
 
@@ -4060,7 +4187,16 @@ on_refresh(Context ctx, Handler handler)
     ALIA_END
 }
 
+void
+on_init(context ctx, action<> on_init);
+
+void
+on_activate(context ctx, action<> on_activate);
+
 } // namespace alia
+
+
+
 
 namespace alia {
 
@@ -4631,6 +4767,9 @@ unwrap(Signal signal)
 
 } // namespace alia
 
+
+
+
 namespace alia {
 
 // lazy_apply(f, args...), where :args are all signals, yields a signal
@@ -4872,6 +5011,7 @@ lift(Function f)
 
 } // namespace alia
 
+
 // This file defines the operators for signals.
 
 namespace alia {
@@ -4892,7 +5032,7 @@ ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(+)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(-)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(*)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(/)
-ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(^)
+ALIA_DEFINE_BINARY_SIGNAL_OPERATOR (^)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(%)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(&)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(|)
@@ -4934,7 +5074,7 @@ ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(+)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(-)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(*)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(/)
-ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(^)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR (^)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(%)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(&)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(|)
@@ -5569,6 +5709,7 @@ auto signal_base<Derived, Value, Direction>::operator[](Index index) const
 
 } // namespace alia
 
+
 namespace alia {
 
 // is_map_like<Container>::value yields a compile-time boolean indicating
@@ -5756,6 +5897,8 @@ for_each(Context ctx, ContainerSignal const& container_signal, Fn&& fn)
 
 } // namespace alia
 
+
+
 namespace alia {
 
 enum class async_status
@@ -5870,15 +6013,18 @@ async(Context ctx, Launcher launcher, Args const&... args)
         {
             auto* system = &get<system_tag>(ctx);
             auto version = data.version;
-            auto report_result = [system, version, data_ptr](Result result) {
-                auto& data = *data_ptr;
-                if (data.version == version)
-                {
-                    data.result = std::move(result);
-                    data.status = async_status::COMPLETE;
-                }
-                refresh_system(*system);
-            };
+            auto container = get_active_component_container(ctx);
+            auto report_result
+                = [system, version, container, data_ptr](Result result) {
+                      auto& data = *data_ptr;
+                      if (data.version == version)
+                      {
+                          data.result = std::move(result);
+                          data.status = async_status::COMPLETE;
+                          mark_dirty_component(container);
+                          refresh_system(*system);
+                      }
+                  };
             try
             {
                 launcher(ctx, report_result, read_signal(args)...);
@@ -5895,9 +6041,11 @@ async(Context ctx, Launcher launcher, Args const&... args)
 
 } // namespace alia
 
+
 #include <map>
 #include <utility>
 #include <vector>
+
 
 namespace alia {
 
@@ -6121,6 +6269,8 @@ transform(Context ctx, Container const& container, Function&& f)
 }
 
 } // namespace alia
+
+
 
 // This file defines utilities for constructing custom signals via lambda
 // functions.
@@ -6470,6 +6620,8 @@ always_ready()
 
 } // namespace alia
 
+
+
 #include <cmath>
 
 // This file defines some numerical adaptors for signals.
@@ -6628,19 +6780,23 @@ round_signal_writes(N n, Step step)
 
 } // namespace alia
 
+
+
 namespace alia {
 
-// state_holder<Value> is designed to be stored persistently as actual
-// application state. Signals for it will track changes in it and report its ID
-// based on that.
+// state_storage<Value> is designed to be stored persistently within the
+// component tree to represent application state or other data that needs to be
+// tracked similarly. It contains a 'version' number that counts changes and
+// serves as a signal value ID, and it also takes care of mark the component
+// tree as 'dirty' when it's updated.
 template<class Value>
-struct state_holder
+struct state_storage
 {
-    state_holder() : version_(0)
+    state_storage() : version_(0)
     {
     }
 
-    explicit state_holder(Value value) : value_(std::move(value)), version_(1)
+    explicit state_storage(Value value) : value_(std::move(value)), version_(1)
     {
     }
 
@@ -6666,7 +6822,7 @@ struct state_holder
     set(Value value)
     {
         value_ = std::move(value);
-        ++version_;
+        handle_change();
     }
 
     // If you REALLY need direct, non-const access to the underlying state,
@@ -6683,42 +6839,67 @@ struct state_holder
     // expected to initialize it.
     //
     Value&
-    nonconst_get()
+    nonconst_ref()
+    {
+        handle_change();
+        return value_;
+    }
+
+    // This is even less safe. It's like above, but any changes you make will
+    // NOT be marked in the component tree, so you should only use this if you
+    // know it's safe to do so.
+    Value&
+    untracked_nonconst_ref()
     {
         ++version_;
         return value_;
     }
 
+    // Update the container that the state is part of.
+    void
+    refresh_container(component_container_ptr const& container)
+    {
+        container_ = container;
+    }
+
  private:
+    void
+    handle_change()
+    {
+        ++version_;
+        mark_dirty_component(container_);
+    }
+
     Value value_;
     // version_ is incremented for each change in the value of the state.
     // If this is 0, the state is considered uninitialized.
     unsigned version_;
+    component_container_ptr container_;
 };
 
-template<class Value>
-struct state_signal : signal<state_signal<Value>, Value, duplex_signal>
+template<class Value, class Direction>
+struct state_signal : signal<state_signal<Value, Direction>, Value, Direction>
 {
-    explicit state_signal(state_holder<Value>* s) : state_(s)
+    explicit state_signal(state_storage<Value>* data) : data_(data)
     {
     }
 
     bool
     has_value() const
     {
-        return state_->is_initialized();
+        return data_->is_initialized();
     }
 
     Value const&
     read() const
     {
-        return state_->get();
+        return data_->get();
     }
 
     simple_id<unsigned> const&
     value_id() const
     {
-        id_ = make_id(state_->version());
+        id_ = make_id(data_->version());
         return id_;
     }
 
@@ -6731,19 +6912,19 @@ struct state_signal : signal<state_signal<Value>, Value, duplex_signal>
     void
     write(Value const& value) const
     {
-        state_->set(value);
+        data_->set(value);
     }
 
  private:
-    state_holder<Value>* state_;
+    state_storage<Value>* data_;
     mutable simple_id<unsigned> id_;
 };
 
 template<class Value>
-state_signal<Value>
-make_state_signal(state_holder<Value>& state)
+state_signal<Value, duplex_signal>
+make_state_signal(state_storage<Value>& data)
 {
-    return state_signal<Value>(&state);
+    return state_signal<Value, duplex_signal>(&data);
 }
 
 // get_state(ctx, initial_value) returns a signal carrying some persistent local
@@ -6756,16 +6937,21 @@ get_state(Context ctx, InitialValue const& initial_value)
 {
     auto initial_value_signal = signalize(initial_value);
 
-    state_holder<typename decltype(initial_value_signal)::value_type>* state;
+    state_storage<typename decltype(initial_value_signal)::value_type>* state;
     get_data(ctx, &state);
 
-    if (!state->is_initialized() && signal_has_value(initial_value_signal))
-        state->set(read_signal(initial_value_signal));
+    on_refresh(ctx, [&](auto ctx) {
+        state->refresh_container(get_active_component_container(ctx));
+        if (!state->is_initialized() && signal_has_value(initial_value_signal))
+            state->untracked_nonconst_ref() = read_signal(initial_value_signal);
+    });
 
     return make_state_signal(*state);
 }
 
 } // namespace alia
+
+
 
 #include <cstdio>
 
@@ -6972,6 +7158,11 @@ as_duplex_text(context ctx, Signal x)
 
 } // namespace alia
 
+
+
+
+
+
 namespace alia {
 
 // Currently, alia's only sense of time is that of a monotonically increasing
@@ -7095,6 +7286,8 @@ struct animation_timer
 
 } // namespace alia
 
+
+
 // This file defines the default implementation for tracking timer events.
 
 namespace alia {
@@ -7102,7 +7295,7 @@ namespace alia {
 struct timer_event_request
 {
     millisecond_count trigger_time;
-    routable_component_id component;
+    external_component_id component;
     unsigned frame_issued;
 };
 
@@ -7116,7 +7309,7 @@ struct timer_event_scheduler
 void
 schedule_event(
     timer_event_scheduler& scheduler,
-    routable_component_id component,
+    external_component_id component,
     millisecond_count time);
 
 // Issue any events that are ready to be issued.
@@ -7125,7 +7318,7 @@ issue_ready_events(
     timer_event_scheduler& scheduler,
     millisecond_count now,
     function_view<void(
-        routable_component_id component, millisecond_count time)> const& issue);
+        external_component_id component, millisecond_count time)> const& issue);
 
 // Are there any scheduled events?
 bool
@@ -7138,6 +7331,7 @@ get_time_until_next_event(
     timer_event_scheduler& scheduler, millisecond_count now);
 
 } // namespace alia
+
 
 namespace alia {
 
@@ -7181,7 +7375,7 @@ struct external_interface
     //
     virtual void
     schedule_timer_event(
-        routable_component_id component, millisecond_count time)
+        external_component_id component, millisecond_count time)
         = 0;
 };
 
@@ -7203,7 +7397,7 @@ struct default_external_interface : external_interface
 
     void
     schedule_timer_event(
-        routable_component_id component, millisecond_count time);
+        external_component_id component, millisecond_count time);
 };
 
 struct system : noncopyable
@@ -7213,6 +7407,7 @@ struct system : noncopyable
     bool refresh_needed = false;
     std::unique_ptr<external_interface> external;
     timer_event_scheduler scheduler;
+    component_container_ptr root_component;
 };
 
 void
@@ -7233,6 +7428,7 @@ void
 process_internal_timing_events(system& sys, millisecond_count now);
 
 } // namespace alia
+
 
 namespace alia {
 
@@ -7278,13 +7474,17 @@ eval_curve_at_x(
 
 } // namespace alia
 
+
+
+
 // This file defines the interface to timer events in alia.
 
 namespace alia {
 
-struct timer_data : component_identity
+struct timer_data
 {
     bool active = false;
+    component_identity identity;
     millisecond_count expected_trigger_time;
 };
 
@@ -7331,6 +7531,7 @@ struct raw_timer
 };
 
 } // namespace alia
+
 
 namespace alia {
 
@@ -7490,6 +7691,9 @@ deflicker(context ctx, Signal x, Delay delay = default_deflicker_delay)
 }
 
 } // namespace alia
+
+
+
 
 namespace alia {
 
@@ -7681,6 +7885,8 @@ smooth(
 
 } // namespace alia
 
+
+
 namespace alia {
 
 namespace impl {
@@ -7797,6 +8003,7 @@ operator<(captured_id const& a, captured_id const& b)
 
 } // namespace alia
 
+
 namespace alia {
 
 context
@@ -7812,6 +8019,109 @@ make_context(
         .add<event_traversal_tag>(event)
         .add<timing_tag>(timing)
         .add<data_traversal_tag>(data);
+}
+
+} // namespace alia
+
+namespace alia {
+
+void
+mark_dirty_component(component_container_ptr const& container)
+{
+    component_container* c = container.get();
+    while (c && !c->dirty)
+    {
+        c->dirty = true;
+        c = c->parent.get();
+    }
+}
+
+void
+mark_dirty_component(dataless_context ctx)
+{
+    event_traversal& traversal = get_event_traversal(ctx);
+    mark_dirty_component(*traversal.active_container);
+}
+
+void
+mark_animating_component(component_container_ptr const& container)
+{
+    component_container* r = container.get();
+    while (r && !r->animating)
+    {
+        r->animating = true;
+        r = r->parent.get();
+    }
+}
+
+void
+mark_animating_component(dataless_context ctx)
+{
+    event_traversal& traversal = get_event_traversal(ctx);
+    mark_animating_component(*traversal.active_container);
+}
+
+void
+scoped_component_container::begin(
+    dataless_context ctx, component_container_ptr* container)
+{
+    event_traversal& traversal = get_event_traversal(ctx);
+
+    ctx_.reset(ctx);
+
+    container_ = container;
+
+    if (traversal.active_container)
+    {
+        if ((*container)->parent != *traversal.active_container)
+            (*container)->parent = *traversal.active_container;
+    }
+    else
+        (*container)->parent.reset();
+
+    parent_ = traversal.active_container;
+    traversal.active_container = container;
+
+    is_dirty_ = (*container)->dirty;
+    (*container)->dirty = false;
+
+    is_animating_ = (*container)->animating;
+    (*container)->animating = false;
+
+    if (traversal.targeted)
+    {
+        if (traversal.path_to_target
+            && traversal.path_to_target->node == container->get())
+        {
+            traversal.path_to_target = traversal.path_to_target->rest;
+            is_on_route_ = true;
+        }
+        else
+            is_on_route_ = false;
+    }
+    else
+        is_on_route_ = true;
+}
+
+void
+scoped_component_container::begin(context ctx)
+{
+    component_container_ptr* container;
+    if (get_data(ctx, &container))
+        container->reset(new component_container);
+
+    this->begin(ctx, container);
+}
+
+void
+scoped_component_container::end()
+{
+    if (ctx_)
+    {
+        auto ctx = *ctx_;
+        get_event_traversal(ctx).active_container = parent_;
+        ctx_.reset();
+    }
 }
 
 } // namespace alia
@@ -8249,54 +8559,8 @@ scoped_data_traversal::end()
 
 } // namespace alia
 
+
 namespace alia {
-
-void
-scoped_routing_region::begin(context ctx)
-{
-    event_traversal& traversal = get_event_traversal(ctx);
-
-    routing_region_ptr* region;
-    if (get_data(ctx, &region))
-        region->reset(new routing_region);
-
-    if (traversal.active_region)
-    {
-        if ((*region)->parent != *traversal.active_region)
-            (*region)->parent = *traversal.active_region;
-    }
-    else
-        (*region)->parent.reset();
-
-    parent_ = traversal.active_region;
-    traversal.active_region = region;
-
-    if (traversal.targeted)
-    {
-        if (traversal.path_to_target
-            && traversal.path_to_target->node == region->get())
-        {
-            traversal.path_to_target = traversal.path_to_target->rest;
-            is_relevant_ = true;
-        }
-        else
-            is_relevant_ = false;
-    }
-    else
-        is_relevant_ = true;
-
-    traversal_ = &traversal;
-}
-
-void
-scoped_routing_region::end()
-{
-    if (traversal_)
-    {
-        traversal_->active_region = parent_;
-        traversal_ = 0;
-    }
-}
 
 static void
 invoke_controller(system& sys, event_traversal& events)
@@ -8314,18 +8578,21 @@ invoke_controller(system& sys, event_traversal& events)
     context_storage storage;
     context ctx = make_context(&storage, sys, events, data, timing);
 
+    scoped_component_container root(ctx, &sys.root_component);
+
     sys.controller(ctx);
 }
 
 namespace impl {
 
 static void
-route_event_(system& sys, event_traversal& traversal, routing_region* target)
+route_event_(
+    system& sys, event_traversal& traversal, component_container* target)
 {
-    // In order to construct the path to the target, we start at the target and
-    // follow the 'parent' pointers until we reach the root.
-    // We do this via recursion so that the path can be constructed entirely
-    // on the stack.
+    // In order to construct the path to the target, we start at the target
+    // and follow the 'parent' pointers until we reach the root. We do this
+    // via recursion so that the path can be constructed entirely on the
+    // stack.
     if (target)
     {
         event_routing_path path_node;
@@ -8341,22 +8608,75 @@ route_event_(system& sys, event_traversal& traversal, routing_region* target)
 }
 
 void
-route_event(system& sys, event_traversal& traversal, routing_region* target)
+route_event(
+    system& sys, event_traversal& traversal, component_container* target)
 {
     try
     {
         route_event_(sys, traversal, target);
     }
-    catch (traversal_aborted&)
+    catch (traversal_abortion&)
     {
     }
 }
 
 } // namespace impl
 
-void abort_traversal(dataless_context)
+void
+abort_traversal(dataless_context ctx)
 {
-    throw traversal_aborted();
+    assert(!is_refresh_event(ctx));
+    get_event_traversal(ctx).aborted = true;
+    throw traversal_abortion();
+}
+
+void
+refresh_component_identity(dataless_context ctx, component_identity& identity)
+{
+    auto const& active_container = get_active_component_container(ctx);
+    if (identity != active_container)
+        identity = active_container;
+}
+
+component_id
+get_component_id(context ctx)
+{
+    component_id id;
+    get_cached_data(ctx, &id);
+    on_refresh(ctx, [&](auto ctx) { refresh_component_identity(ctx, *id); });
+    return id;
+}
+
+struct initialization_detection
+{
+    bool initialized = false;
+};
+
+void
+on_init(context ctx, action<> on_init)
+{
+    initialization_detection& data = get_data<initialization_detection>(ctx);
+    on_refresh(ctx, [&](auto) {
+        if (!data.initialized && on_init.is_ready())
+        {
+            perform_action(on_init);
+            data.initialized = true;
+        }
+    });
+}
+
+void
+on_activate(context ctx, action<> on_activate)
+{
+    initialization_detection& data
+        = get_cached_data<initialization_detection>(ctx);
+    on_refresh(ctx, [&](auto) {
+        if (!data.initialized && on_activate.is_ready())
+        {
+            perform_action(on_activate);
+            data.initialized = true;
+        }
+    });
 }
 
 } // namespace alia
@@ -8396,6 +8716,7 @@ loop_block::next()
 }
 
 } // namespace alia
+
 
 namespace alia {
 
@@ -8516,6 +8837,7 @@ to_string(std::string value)
 
 #include <chrono>
 
+
 namespace alia {
 
 bool
@@ -8529,11 +8851,20 @@ refresh_system(system& sys)
 {
     sys.refresh_needed = false;
 
-    refresh_event refresh;
-    impl::dispatch_event(sys, refresh);
+    int pass_count = 0;
+    while (true)
+    {
+        refresh_event refresh;
+        impl::dispatch_event(sys, refresh);
+        if (!sys.root_component->dirty)
+            break;
+        ++pass_count;
+        assert(pass_count < 64);
+    };
 }
 
 } // namespace alia
+
 
 namespace alia {
 
@@ -8550,7 +8881,7 @@ default_external_interface::get_tick_count() const
 
 void
 default_external_interface::schedule_timer_event(
-    routable_component_id component, millisecond_count time)
+    external_component_id component, millisecond_count time)
 {
     schedule_event(owner.scheduler, component, time);
 }
@@ -8564,6 +8895,7 @@ initialize_system(
     sys.controller = controller;
     sys.external.reset(
         external ? external : new default_external_interface(sys));
+    sys.root_component.reset(new component_container);
 }
 
 void
@@ -8572,7 +8904,7 @@ process_internal_timing_events(system& sys, millisecond_count now)
     issue_ready_events(
         sys.scheduler,
         now,
-        [&](routable_component_id component, millisecond_count trigger_time) {
+        [&](external_component_id component, millisecond_count trigger_time) {
             timer_event event;
             event.trigger_time = trigger_time;
             dispatch_targeted_event(sys, event, component);
@@ -8580,6 +8912,7 @@ process_internal_timing_events(system& sys, millisecond_count now)
 }
 
 } // namespace alia
+
 
 namespace alia {
 
@@ -8683,7 +9016,7 @@ namespace alia {
 void
 schedule_event(
     timer_event_scheduler& scheduler,
-    routable_component_id component,
+    external_component_id component,
     millisecond_count time)
 {
     timer_event_request rq;
@@ -8698,7 +9031,7 @@ issue_ready_events(
     timer_event_scheduler& scheduler,
     millisecond_count now,
     function_view<void(
-        routable_component_id component, millisecond_count time)> const& issue)
+        external_component_id component, millisecond_count time)> const& issue)
 {
     ++scheduler.frame_counter;
     while (true)
@@ -8755,6 +9088,7 @@ get_time_until_next_event(
 
 } // namespace alia
 
+
 namespace alia {
 
 void
@@ -8769,6 +9103,8 @@ schedule_animation_refresh(dataless_context ctx)
             sys.external->schedule_animation_refresh();
         sys.refresh_needed = true;
     }
+    // Ensure that this component gets visited on the next refresh pass.
+    mark_animating_component(ctx);
 }
 
 millisecond_count
@@ -8803,18 +9139,19 @@ namespace alia {
 
 void
 schedule_timer_event(
-    dataless_context ctx, component_id id, millisecond_count trigger_time)
+    dataless_context ctx,
+    external_component_id id,
+    millisecond_count trigger_time)
 {
     auto& sys = get<system_tag>(ctx);
-    sys.external->schedule_timer_event(
-        make_routable_component_id(ctx, id), trigger_time);
+    sys.external->schedule_timer_event(id, trigger_time);
 }
 
 bool
 detect_timer_event(dataless_context ctx, timer_data& data)
 {
     timer_event* event;
-    return detect_targeted_event(ctx, &data, &event)
+    return detect_targeted_event(ctx, &data.identity, &event)
            && event->trigger_time == data.expected_trigger_time;
 }
 
@@ -8824,7 +9161,7 @@ start_timer(dataless_context ctx, timer_data& data, millisecond_count duration)
     auto now = ctx.get<timing_tag>().tick_counter;
     auto trigger_time = now + duration;
     data.expected_trigger_time = trigger_time;
-    schedule_timer_event(ctx, &data, trigger_time);
+    schedule_timer_event(ctx, externalize(&data.identity), trigger_time);
 }
 
 void
@@ -8838,7 +9175,7 @@ restart_timer(
     {
         auto trigger_time = event->trigger_time + duration;
         data.expected_trigger_time = trigger_time;
-        schedule_timer_event(ctx, &data, trigger_time);
+        schedule_timer_event(ctx, externalize(&data.identity), trigger_time);
     }
 }
 
@@ -8848,6 +9185,9 @@ raw_timer::update()
     triggered_ = data_->active && detect_timer_event(ctx_, *data_);
     if (triggered_)
         data_->active = false;
+    on_refresh(ctx_, [&](auto ctx) {
+        refresh_component_identity(ctx, data_->identity);
+    });
 }
 
 void
@@ -8861,6 +9201,7 @@ raw_timer::start(unsigned duration)
 }
 
 } // namespace alia
+
 
 namespace alia {
 

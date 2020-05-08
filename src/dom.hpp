@@ -52,7 +52,7 @@ do_input(dom::context ctx, Signal signal)
 }
 
 void
-do_switch(dom::context ctx, duplex<bool> value);
+do_checkbox(dom::context ctx, duplex<bool> value);
 
 void
 do_button_(dom::context ctx, readable<std::string> text, action<> on_click);
@@ -62,6 +62,16 @@ void
 do_button(dom::context ctx, Text text, action<> on_click)
 {
     do_button_(ctx, signalize(text), on_click);
+}
+
+void
+do_link_(dom::context ctx, readable<std::string> text, action<> on_click);
+
+template<class Text>
+void
+do_link(dom::context ctx, Text text, action<> on_click)
+{
+    do_link_(ctx, signalize(text), on_click);
 }
 
 void
@@ -90,17 +100,11 @@ struct scoped_div : noncopyable
     void
     end();
 
-    bool
-    is_relevant()
-    {
-        return routing_.is_relevant();
-    }
-
  private:
-    std::optional<dom::context> ctx_;
+    optional_context<dom::context> ctx_;
     div_data* data_ = nullptr;
     asmdom::Children* parent_children_list_ = nullptr;
-    scoped_routing_region routing_;
+    scoped_component_container container_;
 };
 
 template<class DoContents>

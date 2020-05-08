@@ -58,8 +58,9 @@ do_heading_(
         });
 }
 
-struct input_data : component_identity
+struct input_data
 {
+    component_identity identity;
     captured_id external_id;
     string value;
     bool invalid = false;
@@ -79,24 +80,26 @@ do_input_(dom::context ctx, duplex<string> value)
     input_data* data;
     get_cached_data(ctx, &data);
 
-    auto id = data;
-    auto routable_id = make_routable_component_id(ctx, id);
+    on_refresh(ctx, [&](auto ctx) {
+        refresh_component_identity(ctx, data->identity);
 
-    refresh_signal_shadow(
-        data->external_id,
-        value,
-        [&](string new_value) {
-            data->value = std::move(new_value);
-            data->invalid = false;
-            ++data->version;
-        },
-        [&]() {
-            data->value.clear();
-            data->invalid = false;
-            ++data->version;
-        });
+        refresh_signal_shadow(
+            data->external_id,
+            value,
+            [&](string new_value) {
+                data->value = std::move(new_value);
+                data->invalid = false;
+                ++data->version;
+            },
+            [&]() {
+                data->value.clear();
+                data->invalid = false;
+                ++data->version;
+            });
+    });
 
     auto* system = &ctx.get<system_tag>();
+    auto external_id = externalize(&data->identity);
 
     add_element(ctx, data->element, make_id(data->version), [&]() {
         asmdom::Attrs attrs;
@@ -111,12 +114,12 @@ do_input_(dom::context ctx, duplex<string> value)
                     {"oninput", [=](emscripten::val e) {
                          value_update_event<std::string> update;
                          update.value = e["target"]["value"].as<std::string>();
-                         dispatch_targeted_event(*system, update, routable_id);
+                         dispatch_targeted_event(*system, update, external_id);
                          return true;
                      }}}));
     });
     on_targeted_event<value_update_event<std::string>>(
-        ctx, id, [=](auto ctx, auto& e) {
+        ctx, &data->identity, [=](auto ctx, auto& e) {
             if (signal_ready_to_write(value))
             {
                 try
@@ -138,10 +141,10 @@ struct click_event : targeted_event
 };
 
 void
-do_switch(dom::context ctx, duplex<bool> value)
+do_checkbox(dom::context ctx, duplex<bool> value)
 {
     auto id = get_component_id(ctx);
-    auto routable_id = make_routable_component_id(ctx, id);
+    auto external_id = externalize(id);
     auto* system = &ctx.get<system_tag>();
 
     element_data* element;
@@ -151,18 +154,16 @@ do_switch(dom::context ctx, duplex<bool> value)
     bool checked = determinate && value.read();
     bool disabled = !value.ready_to_write();
 
-    auto js_id = printf(ctx, "switch-%p", alia::value(id));
-
     add_element(
         ctx,
         get_cached_data<element_data>(ctx),
         combine_ids(ref(value.value_id()), make_id(value.ready_to_write())),
         [=]() {
-            asmdom::VNode* input = asmdom::h(
+            return asmdom::h(
                 "input",
                 asmdom::Data(
                     asmdom::Attrs{{"type", "checkbox"},
-                                  {"class", "mdc-switch__native-control"},
+                                  {"class", "form-check-input"},
                                   {"disabled", disabled ? "true" : "false"},
                                   {"aria-checked", checked ? "true" : "false"}},
                     asmdom::Props{
@@ -176,50 +177,10 @@ do_switch(dom::context ctx, duplex<bool> value)
                              value_update_event<bool> update;
                              update.value = e["target"]["checked"].as<bool>();
                              dispatch_targeted_event(
-                                 *system, update, routable_id);
+                                 *system, update, external_id);
                              return true;
                          }}}));
-            return asmdom::h(
-                "div",
-                asmdom::Data(asmdom::Attrs{
-                    {"class",
-                     disabled
-                         ? (checked ? "mdc-switch mdc-switch--checked "
-                                      "mdc-switch--disabled"
-                                    : "mdc-switch mdc-switch--disabled")
-                         : (checked ? "mdc-switch mdc-switch--checked"
-                                    : "mdc-switch")},
-                    {"id", read_signal(js_id)}}),
-                asmdom::Children(
-                    {asmdom::h(
-                         "div",
-                         asmdom::Data(
-                             asmdom::Attrs{{"class", "mdc-switch__track"}})),
-                     asmdom::h(
-                         "div",
-                         asmdom::Data(asmdom::Attrs{
-                             {"class", "mdc-switch__thumb-underlay"},
-                         }),
-                         asmdom::Children(
-                             {asmdom::h(
-                                  "div",
-                                  asmdom::Data(asmdom::Attrs{
-                                      {"class", "mdc-switch__thumb"}})),
-                              input}))}));
         });
-
-    bool* initialized;
-    if (get_cached_data(ctx, &initialized))
-        *initialized = false;
-    on_refresh(ctx, [&](auto ctx) {
-        if (!*initialized)
-        {
-            ctx.template get<context_info_tag>().js_code
-                += "new mdc.ripple.MDCRipple(document.getElementById('"
-                   + read_signal(js_id) + "'));\n";
-            *initialized = true;
-        }
-    });
 
     on_targeted_event<value_update_event<bool>>(
         ctx, id, [=](auto ctx, auto& e) {
@@ -232,13 +193,11 @@ void
 do_button_(dom::context ctx, readable<std::string> text, action<> on_click)
 {
     auto id = get_component_id(ctx);
-    auto routable_id = make_routable_component_id(ctx, id);
+    auto external_id = externalize(id);
     auto* system = &ctx.get<system_tag>();
 
     element_data* element;
     get_cached_data(ctx, &element);
-
-    auto js_id = printf(ctx, "button-%p", value(id));
 
     if (signal_has_value(text))
     {
@@ -250,44 +209,62 @@ do_button_(dom::context ctx, readable<std::string> text, action<> on_click)
                 return asmdom::h(
                     "button",
                     asmdom::Data(
-                        asmdom::Attrs{
-                            {"class", "mdc-button mdc-button--raised"},
-                            {"id", read_signal(js_id)},
-                            {"disabled",
-                             on_click.is_ready() ? "false" : "true"}},
+                        asmdom::Attrs{{"class", "btn btn-secondary"},
+                                      {"disabled",
+                                       on_click.is_ready() ? "false" : "true"}},
                         asmdom::Callbacks{{"onclick",
                                            [=](emscripten::val) {
                                                click_event click;
                                                dispatch_targeted_event(
-                                                   *system, click, routable_id);
+                                                   *system, click, external_id);
                                                return true;
                                            }}}),
-                    asmdom::Children(
-                        {asmdom::h(
-                             "div",
-                             asmdom::Data(asmdom::Attrs{
-                                 {"class", "mdc-button__ripple"}})),
-                         asmdom::h(
-                             "span",
-                             asmdom::Data(asmdom::Attrs{
-                                 {"class", "mdc-button__label"},
-                             }),
-                             read_signal(text))}));
+                    read_signal(text));
             });
     }
 
-    bool* initialized;
-    if (get_cached_data(ctx, &initialized))
-        *initialized = false;
-    on_refresh(ctx, [&](auto ctx) {
-        if (!*initialized)
-        {
-            ctx.template get<context_info_tag>().js_code
-                += "new mdc.ripple.MDCRipple(document.getElementById('"
-                   + read_signal(js_id) + "'));\n";
-            *initialized = true;
-        }
-    });
+    on_targeted_event<click_event>(
+        ctx, id, [=](auto ctx, auto& e) { perform_action(on_click); });
+}
+
+void
+do_link_(dom::context ctx, readable<std::string> text, action<> on_click)
+{
+    auto id = get_component_id(ctx);
+    auto external_id = externalize(id);
+    auto* system = &ctx.get<system_tag>();
+
+    element_data* element;
+    get_cached_data(ctx, &element);
+
+    if (signal_has_value(text))
+    {
+        add_element(
+            ctx,
+            get_cached_data<element_data>(ctx),
+            combine_ids(ref(text.value_id()), make_id(on_click.is_ready())),
+            [=]() {
+                return asmdom::h(
+                    "li",
+                    asmdom::Children({asmdom::h(
+                        "a",
+                        asmdom::Data(
+                            asmdom::Attrs{
+                                {"href", "javascript: void(0);"},
+                                {"disabled",
+                                 on_click.is_ready() ? "false" : "true"}},
+                            asmdom::Callbacks{{"onclick",
+                                               [=](emscripten::val) {
+                                                   click_event click;
+                                                   dispatch_targeted_event(
+                                                       *system,
+                                                       click,
+                                                       external_id);
+                                                   return true;
+                                               }}}),
+                        read_signal(text))}));
+            });
+    }
 
     on_targeted_event<click_event>(
         ctx, id, [=](auto ctx, auto& e) { perform_action(on_click); });
@@ -335,7 +312,7 @@ struct div_data
 void
 scoped_div::begin(dom::context ctx, readable<std::string> class_name)
 {
-    ctx_ = ctx;
+    ctx_.reset(ctx);
 
     get_cached_data(ctx, &data_);
 
@@ -350,7 +327,7 @@ scoped_div::begin(dom::context ctx, readable<std::string> class_name)
             set(data_->class_name, class_name.read());
     });
 
-    routing_.begin(ctx);
+    container_.begin(ctx);
 }
 
 void
@@ -358,9 +335,9 @@ scoped_div::end()
 {
     if (ctx_)
     {
-        dom::context& ctx = *ctx_;
+        dom::context ctx = *ctx_;
 
-        routing_.end();
+        container_.end();
 
         auto& dom_context = ctx.get<context_info_tag>();
         dom_context.current_children = parent_children_list_;
@@ -386,8 +363,7 @@ handle_refresh_event(dom::context ctx, system& system)
 
     system.controller(ctx);
 
-    asmdom::VNode* root = asmdom::h(
-        "div", asmdom::Data(asmdom::Attrs{{"class", "container"}}), children);
+    asmdom::VNode* root = asmdom::h("", children);
 
     asmdom::patch(system.current_view, root);
     system.current_view = root;
@@ -407,7 +383,7 @@ refresh_for_emscripten(void* system)
 struct timer_callback_data
 {
     alia::system* system;
-    routable_component_id component;
+    external_component_id component;
     millisecond_count trigger_time;
 };
 
@@ -436,14 +412,14 @@ struct dom_external_interface : default_external_interface
 
     void
     schedule_timer_event(
-        routable_component_id component, millisecond_count time)
+        external_component_id component, millisecond_count time)
     {
         auto timeout_data
             = new timer_callback_data{&this->owner, component, time};
         emscripten_async_call(
             timer_callback, timeout_data, time - this->get_tick_count());
     }
-}; // namespace dom
+};
 
 void
 system::operator()(alia::context vanilla_ctx)
