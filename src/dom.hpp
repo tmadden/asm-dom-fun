@@ -51,8 +51,8 @@ do_input(dom::context ctx, Signal signal)
     do_input_(ctx, as_duplex_text(ctx, signal));
 }
 
-void
-do_checkbox(dom::context ctx, duplex<bool> value);
+// void
+// do_checkbox(dom::context ctx, duplex<bool> value);
 
 void
 do_button_(dom::context ctx, readable<std::string> text, action<> on_click);
@@ -64,15 +64,15 @@ do_button(dom::context ctx, Text text, action<> on_click)
     do_button_(ctx, signalize(text), on_click);
 }
 
-void
-do_link_(dom::context ctx, readable<std::string> text, action<> on_click);
+// void
+// do_link_(dom::context ctx, readable<std::string> text, action<> on_click);
 
-template<class Text>
-void
-do_link(dom::context ctx, Text text, action<> on_click)
-{
-    do_link_(ctx, signalize(text), on_click);
-}
+// template<class Text>
+// void
+// do_link(dom::context ctx, Text text, action<> on_click)
+// {
+//     do_link_(ctx, signalize(text), on_click);
+// }
 
 void
 do_colored_box(dom::context ctx, readable<rgb8> color);

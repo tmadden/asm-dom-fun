@@ -140,54 +140,56 @@ struct click_event : targeted_event
 {
 };
 
-void
-do_checkbox(dom::context ctx, duplex<bool> value)
-{
-    auto id = get_component_id(ctx);
-    auto external_id = externalize(id);
-    auto* system = &ctx.get<system_tag>();
+// void
+// do_checkbox(dom::context ctx, duplex<bool> value)
+// {
+//     auto id = get_component_id(ctx);
+//     auto external_id = externalize(id);
+//     auto* system = &ctx.get<system_tag>();
 
-    element_data* element;
-    get_cached_data(ctx, &element);
+//     element_data* element;
+//     get_cached_data(ctx, &element);
 
-    bool determinate = value.has_value();
-    bool checked = determinate && value.read();
-    bool disabled = !value.ready_to_write();
+//     bool determinate = value.has_value();
+//     bool checked = determinate && value.read();
+//     bool disabled = !value.ready_to_write();
 
-    add_element(
-        ctx,
-        get_cached_data<element_data>(ctx),
-        combine_ids(ref(value.value_id()), make_id(value.ready_to_write())),
-        [=]() {
-            return asmdom::h(
-                "input",
-                asmdom::Data(
-                    asmdom::Attrs{{"type", "checkbox"},
-                                  {"class", "form-check-input"},
-                                  {"disabled", disabled ? "true" : "false"},
-                                  {"aria-checked", checked ? "true" : "false"}},
-                    asmdom::Props{
-                        {"indeterminate", emscripten::val(!determinate)},
-                        {"checked", emscripten::val(checked)}},
-                    asmdom::Callbacks{
-                        {"onchange", [=](emscripten::val e) {
-                             std::cout << "onchange" << std::endl;
-                             std::cout << e["target"]["checked"].as<bool>()
-                                       << std::endl;
-                             value_update_event<bool> update;
-                             update.value = e["target"]["checked"].as<bool>();
-                             dispatch_targeted_event(
-                                 *system, update, external_id);
-                             return true;
-                         }}}));
-        });
+//     add_element(
+//         ctx,
+//         *element,
+//         combine_ids(ref(value.value_id()), make_id(value.ready_to_write())),
+//         [=]() {
+//             return asmdom::h(
+//                 "input",
+//                 asmdom::Data(
+//                     asmdom::Attrs{{"type", "checkbox"},
+//                                   {"class", "form-check-input"},
+//                                   {"disabled", disabled ? "true" : "false"},
+//                                   {"aria-checked", checked ? "true" :
+//                                   "false"}},
+//                     asmdom::Props{
+//                         {"indeterminate", emscripten::val(!determinate)},
+//                         {"checked", emscripten::val(checked)}},
+//                     asmdom::Callbacks{
+//                         {"onchange", [=](emscripten::val e) {
+//                              std::cout << "onchange" << std::endl;
+//                              std::cout << e["target"]["checked"].as<bool>()
+//                                        << std::endl;
+//                              value_update_event<bool> update;
+//                              update.value =
+//                              e["target"]["checked"].as<bool>();
+//                              dispatch_targeted_event(
+//                                  *system, update, external_id);
+//                              return true;
+//                          }}}));
+//         });
 
-    on_targeted_event<value_update_event<bool>>(
-        ctx, id, [=](auto ctx, auto& e) {
-            std::cout << "New value!: " << e.value << std::endl;
-            write_signal(value, e.value);
-        });
-}
+//     on_targeted_event<value_update_event<bool>>(
+//         ctx, id, [=](auto ctx, auto& e) {
+//             std::cout << "New value!: " << e.value << std::endl;
+//             write_signal(value, e.value);
+//         });
+// }
 
 void
 do_button_(dom::context ctx, readable<std::string> text, action<> on_click)
@@ -203,7 +205,7 @@ do_button_(dom::context ctx, readable<std::string> text, action<> on_click)
     {
         add_element(
             ctx,
-            get_cached_data<element_data>(ctx),
+            *element,
             combine_ids(ref(text.value_id()), make_id(on_click.is_ready())),
             [=]() {
                 return asmdom::h(
@@ -227,48 +229,55 @@ do_button_(dom::context ctx, readable<std::string> text, action<> on_click)
         ctx, id, [=](auto ctx, auto& e) { perform_action(on_click); });
 }
 
-void
-do_link_(dom::context ctx, readable<std::string> text, action<> on_click)
-{
-    auto id = get_component_id(ctx);
-    auto external_id = externalize(id);
-    auto* system = &ctx.get<system_tag>();
+// void
+// do_link_(dom::context ctx, readable<std::string> text, action<> on_click)
+// {
+//     auto id = get_component_id(ctx);
+//     auto external_id = externalize(id);
+//     auto* system = &ctx.get<system_tag>();
 
-    element_data* element;
-    get_cached_data(ctx, &element);
+//     element_data* element;
+//     get_cached_data(ctx, &element);
 
-    if (signal_has_value(text))
-    {
-        add_element(
-            ctx,
-            get_cached_data<element_data>(ctx),
-            combine_ids(ref(text.value_id()), make_id(on_click.is_ready())),
-            [=]() {
-                return asmdom::h(
-                    "li",
-                    asmdom::Children({asmdom::h(
-                        "a",
-                        asmdom::Data(
-                            asmdom::Attrs{
-                                {"href", "javascript: void(0);"},
-                                {"disabled",
-                                 on_click.is_ready() ? "false" : "true"}},
-                            asmdom::Callbacks{{"onclick",
-                                               [=](emscripten::val) {
-                                                   click_event click;
-                                                   dispatch_targeted_event(
-                                                       *system,
-                                                       click,
-                                                       external_id);
-                                                   return true;
-                                               }}}),
-                        read_signal(text))}));
-            });
-    }
+//     if (signal_has_value(text))
+//     {
+//         add_element(
+//             ctx,
+//             *element,
+//             combine_ids(ref(text.value_id()), make_id(on_click.is_ready())),
+//             [=]() {
+//                 return asmdom::h(
+//                     "li",
+//                     asmdom::Children({asmdom::h(
+//                         "a",
+//                         asmdom::Data(
+//                             asmdom::Attrs{
+//                                 {"href", "javascript: void(0);"},
+//                                 {"disabled",
+//                                  on_click.is_ready() ? "false" : "true"}},
+//                             asmdom::Callbacks{{"onclick",
+//                                                [=](emscripten::val) {
+//                                                    click_event click;
+//                                                    dispatch_targeted_event(
+//                                                        *system,
+//                                                        click,
+//                                                        external_id);
+//                                                    return true;
+//                                                }}}),
+//                         read_signal(text))}));
+//             });
+//     }
 
-    on_targeted_event<click_event>(
-        ctx, id, [=](auto ctx, auto& e) { perform_action(on_click); });
-}
+//     on_targeted_event<click_event>(
+//         ctx, id, [=](auto ctx, auto& e) { perform_action(on_click); });
+// }
+
+// template<class Text>
+// void
+// do_link(dom::context ctx, Text text, action<> on_click)
+// {
+//     do_link_(ctx, signalize(text), on_click);
+// }
 
 void
 do_colored_box(dom::context ctx, readable<rgb8> color)
