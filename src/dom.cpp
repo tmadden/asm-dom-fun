@@ -3,145 +3,122 @@
 #include <emscripten/emscripten.h>
 #include <emscripten/val.h>
 
+#include <chrono>
+
 namespace dom {
 
-struct element_data
+struct text_node_data
 {
-    asmdom::VNode* vnode = nullptr;
-    captured_id key;
-};
-
-template<class CreateElement>
-void
-add_element(
-    dom::context ctx,
-    element_data& data,
-    id_interface const& key,
-    CreateElement create_element)
-{
-    on_refresh(ctx, [&](auto ctx) {
-        // Theoretically, we should be able to reuse the vnode if the key hasn't
-        // changed. However, asm-dom's patching semantics mean that sometimes
-        // the vnodes get overwritten or destroyed without our knowledge, so
-        // this isn't as simple as it seems.
-        // if (!data.key.matches(key))
-        {
-            data.vnode = create_element();
-            // data.key.capture(key);
-        }
-        get<context_info_tag>(ctx).current_children->push_back(data.vnode);
-    });
-}
-
-void
-do_text_(dom::context ctx, readable<std::string> text)
-{
-    add_element(
-        ctx, get_cached_data<element_data>(ctx), text.value_id(), [=]() {
-            return asmdom::h(
-                "p", signal_has_value(text) ? read_signal(text) : string());
-        });
-}
-
-void
-do_heading_(
-    dom::context ctx, readable<std::string> level, readable<std::string> text)
-{
-    add_element(
-        ctx,
-        get_cached_data<element_data>(ctx),
-        combine_ids(ref(level.value_id()), ref(text.value_id())),
-        [=]() {
-            return asmdom::h(
-                signal_has_value(level) ? read_signal(level) : "p",
-                signal_has_value(text) ? read_signal(text) : string());
-        });
-}
-
-struct input_data
-{
-    component_identity identity;
-    captured_id external_id;
-    string value;
-    bool invalid = false;
-    element_data element;
-    unsigned version = 0;
-};
-
-template<class Value>
-struct value_update_event : targeted_event
-{
-    Value value;
+    tree_node<element_object> node;
+    captured_id value_id;
 };
 
 void
-do_input_(dom::context ctx, duplex<string> value)
+text_node_(dom::context ctx, readable<string> text)
 {
-    input_data* data;
-    get_cached_data(ctx, &data);
-
-    on_refresh(ctx, [&](auto ctx) {
-        refresh_component_identity(ctx, data->identity);
-
+    text_node_data* data;
+    if (get_cached_data(ctx, &data))
+        data->node.object.create_as_text_node("");
+    if (is_refresh_event(ctx))
+    {
+        refresh_tree_node(get<tree_traversal_tag>(ctx), data->node);
         refresh_signal_shadow(
-            data->external_id,
-            value,
-            [&](string new_value) {
-                data->value = std::move(new_value);
-                data->invalid = false;
-                ++data->version;
+            data->value_id,
+            text,
+            [&](std::string const& new_value) {
+                EM_ASM_(
+                    { Module.setNodeValue($0, Module['UTF8ToString']($1)); },
+                    data->node.object.js_id,
+                    new_value.c_str());
             },
             [&]() {
-                data->value.clear();
-                data->invalid = false;
-                ++data->version;
+                EM_ASM_(
+                    { Module.setNodeValue($0, ""); }, data->node.object.js_id);
             });
-    });
-
-    auto* system = &ctx.get<system_tag>();
-    auto external_id = externalize(&data->identity);
-
-    add_element(ctx, data->element, make_id(data->version), [&]() {
-        asmdom::Attrs attrs;
-        if (data->invalid)
-            attrs["class"] = "invalid-input";
-        return asmdom::h(
-            "input",
-            asmdom::Data(
-                attrs,
-                asmdom::Props{{"value", emscripten::val(data->value)}},
-                asmdom::Callbacks{
-                    {"oninput", [=](emscripten::val e) {
-                         value_update_event<std::string> update;
-                         update.value = e["target"]["value"].as<std::string>();
-                         dispatch_targeted_event(*system, update, external_id);
-                         return true;
-                     }}}));
-    });
-    on_targeted_event<value_update_event<std::string>>(
-        ctx, &data->identity, [=](auto ctx, auto& e) {
-            if (signal_ready_to_write(value))
-            {
-                try
-                {
-                    write_signal(value, e.value);
-                }
-                catch (validation_error&)
-                {
-                    data->invalid = true;
-                }
-            }
-            data->value = e.value;
-            ++data->version;
-        });
+    }
 }
 
-struct click_event : targeted_event
-{
-};
+// struct input_data
+// {
+//     component_identity identity;
+//     captured_id external_id;
+//     string value;
+//     bool invalid = false;
+//     element_data element;
+//     unsigned version = 0;
+// };
+
+// template<class Value>
+// struct value_update_event : targeted_event
+// {
+//     Value value;
+// };
 
 // void
-// do_checkbox(dom::context ctx, duplex<bool> value)
+// do_input_(dom::context ctx, duplex<string> value)
+// {
+//     input_data* data;
+//     get_cached_data(ctx, &data);
+
+//     on_refresh(ctx, [&](auto ctx) {
+//         refresh_component_identity(ctx, data->identity);
+
+//         refresh_signal_shadow(
+//             data->external_id,
+//             value,
+//             [&](string new_value) {
+//                 data->value = std::move(new_value);
+//                 data->invalid = false;
+//                 ++data->version;
+//             },
+//             [&]() {
+//                 data->value.clear();
+//                 data->invalid = false;
+//                 ++data->version;
+//             });
+//     });
+
+//     auto* system = &ctx.get<system_tag>();
+//     auto external_id = externalize(&data->identity);
+
+//     add_element(ctx, data->element, make_id(data->version), [&]() {
+//         asmdom::Attrs attrs;
+//         if (data->invalid)
+//             attrs["class"] = "invalid-input";
+//         return asmdom::h(
+//             "input",
+//             asmdom::Data(
+//                 attrs,
+//                 asmdom::Props{{"value", emscripten::val(data->value)}},
+//                 asmdom::Callbacks{
+//                     {"oninput", [=](emscripten::val e) {
+//                          value_update_event<std::string> update;
+//                          update.value =
+//                          e["target"]["value"].as<std::string>();
+//                          dispatch_targeted_event(*system, update,
+//                          external_id); return true;
+//                      }}}));
+//     });
+//     on_targeted_event<value_update_event<std::string>>(
+//         ctx, &data->identity, [=](auto ctx, auto& e) {
+//             if (signal_ready_to_write(value))
+//             {
+//                 try
+//                 {
+//                     write_signal(value, e.value);
+//                 }
+//                 catch (validation_error&)
+//                 {
+//                     data->invalid = true;
+//                 }
+//             }
+//             data->value = e.value;
+//             ++data->version;
+//         });
+// }
+
+// void
+// do_button_(dom::context ctx, readable<std::string> text, action<> on_click)
 // {
 //     auto id = get_component_id(ctx);
 //     auto external_id = externalize(id);
@@ -150,84 +127,35 @@ struct click_event : targeted_event
 //     element_data* element;
 //     get_cached_data(ctx, &element);
 
-//     bool determinate = value.has_value();
-//     bool checked = determinate && value.read();
-//     bool disabled = !value.ready_to_write();
+//     if (signal_has_value(text))
+//     {
+//         add_element(
+//             ctx,
+//             *element,
+//             combine_ids(ref(text.value_id()), make_id(on_click.is_ready())),
+//             [=]() {
+//                 return asmdom::h(
+//                     "button",
+//                     asmdom::Data(
+//                         asmdom::Attrs{{"class", "btn btn-secondary"},
+//                                       {"disabled",
+//                                        on_click.is_ready() ? "false" :
+//                                        "true"}},
+//                         asmdom::Callbacks{{"onclick",
+//                                            [=](emscripten::val) {
+//                                                click_event click;
+//                                                dispatch_targeted_event(
+//                                                    *system, click,
+//                                                    external_id);
+//                                                return true;
+//                                            }}}),
+//                     read_signal(text));
+//             });
+//     }
 
-//     add_element(
-//         ctx,
-//         *element,
-//         combine_ids(ref(value.value_id()), make_id(value.ready_to_write())),
-//         [=]() {
-//             return asmdom::h(
-//                 "input",
-//                 asmdom::Data(
-//                     asmdom::Attrs{{"type", "checkbox"},
-//                                   {"class", "form-check-input"},
-//                                   {"disabled", disabled ? "true" : "false"},
-//                                   {"aria-checked", checked ? "true" :
-//                                   "false"}},
-//                     asmdom::Props{
-//                         {"indeterminate", emscripten::val(!determinate)},
-//                         {"checked", emscripten::val(checked)}},
-//                     asmdom::Callbacks{
-//                         {"onchange", [=](emscripten::val e) {
-//                              std::cout << "onchange" << std::endl;
-//                              std::cout << e["target"]["checked"].as<bool>()
-//                                        << std::endl;
-//                              value_update_event<bool> update;
-//                              update.value =
-//                              e["target"]["checked"].as<bool>();
-//                              dispatch_targeted_event(
-//                                  *system, update, external_id);
-//                              return true;
-//                          }}}));
-//         });
-
-//     on_targeted_event<value_update_event<bool>>(
-//         ctx, id, [=](auto ctx, auto& e) {
-//             std::cout << "New value!: " << e.value << std::endl;
-//             write_signal(value, e.value);
-//         });
+//     on_targeted_event<click_event>(
+//         ctx, id, [=](auto ctx, auto& e) { perform_action(on_click); });
 // }
-
-void
-do_button_(dom::context ctx, readable<std::string> text, action<> on_click)
-{
-    auto id = get_component_id(ctx);
-    auto external_id = externalize(id);
-    auto* system = &ctx.get<system_tag>();
-
-    element_data* element;
-    get_cached_data(ctx, &element);
-
-    if (signal_has_value(text))
-    {
-        add_element(
-            ctx,
-            *element,
-            combine_ids(ref(text.value_id()), make_id(on_click.is_ready())),
-            [=]() {
-                return asmdom::h(
-                    "button",
-                    asmdom::Data(
-                        asmdom::Attrs{{"class", "btn btn-secondary"},
-                                      {"disabled",
-                                       on_click.is_ready() ? "false" : "true"}},
-                        asmdom::Callbacks{{"onclick",
-                                           [=](emscripten::val) {
-                                               click_event click;
-                                               dispatch_targeted_event(
-                                                   *system, click, external_id);
-                                               return true;
-                                           }}}),
-                    read_signal(text));
-            });
-    }
-
-    on_targeted_event<click_event>(
-        ctx, id, [=](auto ctx, auto& e) { perform_action(on_click); });
-}
 
 // void
 // do_link_(dom::context ctx, readable<std::string> text, action<> on_click)
@@ -279,109 +207,91 @@ do_button_(dom::context ctx, readable<std::string> text, action<> on_click)
 //     do_link_(ctx, signalize(text), on_click);
 // }
 
-void
-do_colored_box(dom::context ctx, readable<rgb8> color)
-{
-    add_element(
-        ctx, get_cached_data<element_data>(ctx), color.value_id(), [=]() {
-            char style[64] = {'\0'};
-            if (signal_has_value(color))
-            {
-                rgb8 const& c = read_signal(color);
-                snprintf(
-                    style,
-                    64,
-                    "background-color: #%02x%02x%02x",
-                    c.r,
-                    c.g,
-                    c.b);
-            }
-            return asmdom::h(
-                "div",
-                asmdom::Data(
-                    asmdom::Attrs{{"class", "colored-box"}, {"style", style}}));
-        });
-}
+// void
+// do_colored_box(dom::context ctx, readable<rgb8> color)
+// {
+//     add_element(
+//         ctx, get_cached_data<element_data>(ctx), color.value_id(), [=]() {
+//             char style[64] = {'\0'};
+//             if (signal_has_value(color))
+//             {
+//                 rgb8 const& c = read_signal(color);
+//                 snprintf(
+//                     style,
+//                     64,
+//                     "background-color: #%02x%02x%02x",
+//                     c.r,
+//                     c.g,
+//                     c.b);
+//             }
+//             return asmdom::h(
+//                 "div",
+//                 asmdom::Data(
+//                     asmdom::Attrs{{"class", "colored-box"}, {"style",
+//                     style}}));
+//         });
+// }
 
-void
-do_hr(dom::context ctx)
-{
-    add_element(ctx, get_cached_data<element_data>(ctx), unit_id, [=]() {
-        return asmdom::h("hr");
-    });
-}
+// void
+// do_hr(dom::context ctx)
+// {
+//     add_element(ctx, get_cached_data<element_data>(ctx), unit_id, [=]() {
+//         return asmdom::h("hr");
+//     });
+// }
 
-struct div_data
-{
-    element_data element;
-    keyed_data<std::string> class_name;
-    asmdom::Children children_;
-};
+// struct div_data
+// {
+//     element_data element;
+//     keyed_data<std::string> class_name;
+//     asmdom::Children children_;
+// };
 
-void
-scoped_div::begin(dom::context ctx, readable<std::string> class_name)
-{
-    ctx_.reset(ctx);
+// void
+// scoped_div::begin(dom::context ctx, readable<std::string> class_name)
+// {
+//     ctx_.reset(ctx);
 
-    get_cached_data(ctx, &data_);
+//     get_cached_data(ctx, &data_);
 
-    on_refresh(ctx, [&](auto ctx) {
-        auto& dom_context = get<context_info_tag>(ctx);
-        parent_children_list_ = dom_context.current_children;
-        dom_context.current_children = &data_->children_;
-        data_->children_.clear();
+//     on_refresh(ctx, [&](auto ctx) {
+//         auto& dom_context = get<tree_traversal_tag>(ctx);
+//         parent_children_list_ = dom_context.current_children;
+//         dom_context.current_children = &data_->children_;
+//         data_->children_.clear();
 
-        refresh_keyed_data(data_->class_name, class_name.value_id());
-        if (!is_valid(data_->class_name) && class_name.has_value())
-            set(data_->class_name, class_name.read());
-    });
+//         refresh_keyed_data(data_->class_name, class_name.value_id());
+//         if (!is_valid(data_->class_name) && class_name.has_value())
+//             set(data_->class_name, class_name.read());
+//     });
 
-    container_.begin(ctx);
-}
+//     container_.begin(ctx);
+// }
 
-void
-scoped_div::end()
-{
-    if (ctx_)
-    {
-        dom::context ctx = *ctx_;
+// void
+// scoped_div::end()
+// {
+//     if (ctx_)
+//     {
+//         dom::context ctx = *ctx_;
 
-        container_.end();
+//         container_.end();
 
-        auto& dom_context = ctx.get<context_info_tag>();
-        dom_context.current_children = parent_children_list_;
+//         auto& dom_context = ctx.get<tree_traversal_tag>();
+//         dom_context.current_children = parent_children_list_;
 
-        if (is_refresh_event(ctx))
-        {
-            asmdom::Attrs attrs;
-            if (is_valid(data_->class_name))
-                attrs["class"] = get(data_->class_name);
-            parent_children_list_->push_back(
-                asmdom::h("div", asmdom::Data(attrs), data_->children_));
-        }
+//         if (is_refresh_event(ctx))
+//         {
+//             asmdom::Attrs attrs;
+//             if (is_valid(data_->class_name))
+//                 attrs["class"] = get(data_->class_name);
+//             parent_children_list_->push_back(
+//                 asmdom::h("div", asmdom::Data(attrs), data_->children_));
+//         }
 
-        ctx_.reset();
-    }
-}
-
-static void
-handle_refresh_event(dom::context ctx, system& system)
-{
-    asmdom::Children children;
-    ctx.get<context_info_tag>().current_children = &children;
-
-    system.controller(ctx);
-
-    asmdom::VNode* root = asmdom::h("", children);
-
-    asmdom::patch(system.current_view, root);
-    system.current_view = root;
-
-    if (!ctx.get<context_info_tag>().js_code.empty())
-    {
-        emscripten_run_script(ctx.get<context_info_tag>().js_code.c_str());
-    }
-}
+//         ctx_.reset();
+//     }
+// }
 
 static void
 refresh_for_emscripten(void* system)
@@ -433,12 +343,32 @@ struct dom_external_interface : default_external_interface
 void
 system::operator()(alia::context vanilla_ctx)
 {
-    context_info context_info;
-    dom::context ctx = vanilla_ctx.add<context_info_tag>(context_info);
+    tree_traversal<element_object> traversal;
+    auto ctx = vanilla_ctx.add<tree_traversal_tag>(traversal);
 
     if (is_refresh_event(ctx))
     {
-        handle_refresh_event(ctx, *this);
+        std::chrono::steady_clock::time_point begin
+            = std::chrono::steady_clock::now();
+
+        traverse_object_tree(
+            traversal, this->root_node, [&]() { this->controller(ctx); });
+
+        std::chrono::steady_clock::time_point end
+            = std::chrono::steady_clock::now();
+        std::cout << "refresh time: "
+                  << std::chrono::duration_cast<std::chrono::microseconds>(
+                         end - begin)
+                         .count()
+                  << "[µs]" << std::endl;
+    }
+    else
+    {
+        this->controller(ctx);
+    }
+
+    if (is_refresh_event(ctx))
+    {
     }
     else
     {
@@ -453,7 +383,7 @@ initialize(
     std::string const& dom_node_id,
     std::function<void(dom::context)> controller)
 {
-    // Initialize asm-dom (once).
+    // Initialize asm - dom(once).
     static bool asmdom_initialized = false;
     if (!asmdom_initialized)
     {
@@ -464,7 +394,7 @@ initialize(
         asmdom_initialized = true;
     }
 
-    // Hook up the dom::system to the alia::system.
+    // Initialize the alia::system and hook it up to the dom::system.
     initialize_system(
         alia_system,
         std::ref(dom_system),
@@ -473,10 +403,16 @@ initialize(
 
     // Replace the requested node in the DOM with our virtual DOM.
     emscripten::val document = emscripten::val::global("document");
-    emscripten::val root
+    emscripten::val placeholder
         = document.call<emscripten::val>("getElementById", dom_node_id);
-    dom_system.current_view = asmdom::h("div", std::string(""));
-    asmdom::patch(root, dom_system.current_view);
+    // For now, just create a div to hold all our content.
+    emscripten::val root = document.call<emscripten::val>(
+        "createElement", emscripten::val("div"));
+    placeholder["parentNode"].call<emscripten::val>(
+        "replaceChild", root, placeholder);
+    dom_system.root_node.object.js_id
+        = emscripten::val::global("window")["asmDomHelpers"]["domApi"]
+              .call<int>("addNode", root);
 
     // Update the virtual DOM.
     refresh_system(alia_system);
