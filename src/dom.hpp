@@ -52,7 +52,7 @@ struct element_object
     {
         assert(this->js_id != 0);
         EM_ASM_(
-            { Module.insertAfter($0, $1, Module.nextSibling($2)); },
+            { Module.insertAfter($0, $1, $2); },
             parent.js_id,
             this->js_id,
             after ? after->js_id : 0);
@@ -101,13 +101,64 @@ struct element : noncopyable
     element&
     attr_(char const* name, readable<string> value)
     {
-        // refresh_signal_shadow(
-        //     get_cached_data<captured_id>(ctx_),
-        //     value,
-        //     [&](string const&) { dirty_ = true; },
-        //     [&]() { dirty_ = true; });
-        // if (signal_has_value(value))
-        //     attrs_[name] = read_signal(value);
+        refresh_signal_shadow(
+            get_cached_data<captured_id>(ctx_),
+            value,
+            [&](string const& new_value) {
+                std::cout << "attr: " << name << " to " << new_value << "\n";
+                EM_ASM_(
+                    {
+                        Module.setAttribute(
+                            $0,
+                            Module['UTF8ToString']($1),
+                            Module['UTF8ToString']($2));
+                    },
+                    node_->object.js_id,
+                    name,
+                    new_value.c_str());
+            },
+            [&]() {
+                std::cout << "attr: " << name << " to indeterminate\n";
+                EM_ASM_(
+                    { Module.removeAttribute($0, Module['UTF8ToString']($1)); },
+                    node_->object.js_id,
+                    name);
+            });
+        return *this;
+    }
+    element&
+    attr_(char const* name, readable<bool> value)
+    {
+        refresh_signal_shadow(
+            get_cached_data<captured_id>(ctx_),
+            value,
+            [&](bool new_value) {
+                std::cout << "attr: " << name << " to " << new_value << "\n";
+                if (new_value)
+                {
+                    EM_ASM_(
+                        {
+                            Module.setAttribute(
+                                $0,
+                                Module['UTF8ToString']($1),
+                                Module['UTF8ToString']($2));
+                        },
+                        node_->object.js_id,
+                        name,
+                        "");
+                }
+                else
+                {
+                    EM_ASM_(
+                        {
+                            Module.removeAttribute(
+                                $0, Module['UTF8ToString']($1));
+                        },
+                        node_->object.js_id,
+                        name);
+                }
+            },
+            [&]() { std::cout << "attr: " << name << " to indeterminate\n"; });
         return *this;
     }
     template<class Value>
@@ -125,13 +176,29 @@ struct element : noncopyable
         // refresh_signal_shadow(
         //     get_cached_data<captured_id>(ctx_),
         //     value_,
-        //     [&](Value const&) { dirty_ = true; },
-        //     [&]() { dirty_ = true; });
-        // if (signal_has_value(value_))
-        // {
-        //     props_.insert(
-        //         std::make_pair(name, emscripten::val(read_signal(value_))));
-        // }
+        //     [&](Value const& new_value) {
+        //         // EM_ASM_(
+        //         //     { Module.nodes[$0][$1] = $2; },
+        //         //     node_->object.js_id,
+        //         //     name,
+        //         //     new_value);
+        //         std::cout << "prop: " << name << " to " << new_value << "\n";
+        //         std::cout << emscripten::val::global(
+        //                          "window")["asmDomHelpers"]["nodes"]
+        //                                   [node_->object.js_id]["id"]
+        //                                       .as<std::string>()
+        //                   << "\n";
+        //         // TODO: Need to deal with asmDomRaws.
+        //         emscripten::val::global(
+        //             "window")["asmDomHelpers"]["nodes"][node_->object.js_id]
+        //             .set(name, emscripten::val(new_value));
+        //     },
+        //     [&]() {
+        //         EM_ASM_(
+        //             { Module.nodes[$0][$1] = emscripten::val::undefined(); },
+        //             node_->object.js_id,
+        //             name);
+        //     });
         return *this;
     }
 
@@ -211,7 +278,8 @@ struct element : noncopyable
 // do_checkbox(dom::context ctx, duplex<bool> value);
 
 // void
-// do_button_(dom::context ctx, readable<std::string> text, action<> on_click);
+// do_button_(dom::context ctx, readable<std::string> text, action<>
+// on_click);
 
 // template<class Text>
 // void
@@ -221,7 +289,8 @@ struct element : noncopyable
 // }
 
 // void
-// do_link_(dom::context ctx, readable<std::string> text, action<> on_click);
+// do_link_(dom::context ctx, readable<std::string> text, action<>
+// on_click);
 
 // template<class Text>
 // void

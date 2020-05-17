@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// alia.hpp - (local) - generated 2020-05-15T11:46:41-04:00
+// alia.hpp - (local) - generated 2020-05-15T19:00:04-04:00
 
 #ifndef ALIA_CORE_HPP
 #define ALIA_CORE_HPP
@@ -2009,7 +2009,8 @@ struct string_literal_signal
     id_interface const&
     value_id() const
     {
-        return unit_id;
+        id_ = make_id(text_);
+        return id_;
     }
     bool
     has_value() const
@@ -2025,6 +2026,7 @@ struct string_literal_signal
  private:
     char const* text_;
     lazy_reader<std::string> lazy_reader_;
+    mutable simple_id<char const*> id_;
 };
 inline string_literal_signal
 value(char const* text)

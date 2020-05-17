@@ -366,14 +366,6 @@ system::operator()(alia::context vanilla_ctx)
     {
         this->controller(ctx);
     }
-
-    if (is_refresh_event(ctx))
-    {
-    }
-    else
-    {
-        this->controller(ctx);
-    }
 }
 
 void

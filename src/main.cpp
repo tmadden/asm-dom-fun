@@ -44,8 +44,7 @@ do_checkbox_(dom::context ctx, duplex<bool> value, readable<std::string> label)
             element(ctx, "input")
                 .attr("type", "checkbox")
                 .attr("class", "custom-control-input")
-                .attr("disabled", disabled ? "true" : "false")
-                .attr("aria-checked", checked ? "true" : "false")
+                .attr("disabled", disabled)
                 .attr("id", "custom-check-1")
                 .prop("indeterminate", !determinate)
                 .prop("checked", checked)
@@ -334,10 +333,24 @@ do_heading(dom::context ctx, char const* level, Text text)
 void
 do_content_ui(dom::context ctx)
 {
-    for (int i = 0; i != 100; ++i)
+    auto state = get_state(ctx, false);
+    // raw_timer timer(ctx);
+    // if (timer.is_triggered())
+    //     state.write(!read_signal(state));
+    // if (!timer.is_active())
+    //     timer.start(5000);
+    // if (timer.is_triggered())
+    //     abort_traversal(ctx);
+
+    element(ctx, "h4")
+        .attr("class", "header-title")
+        .text(conditional(state, "On!", "Off!"));
+
+    do_checkbox(ctx, state, "Abacadaba");
+
+    for (int i = 0; i != 10; ++i)
         element(ctx, "h4").attr("class", "header-title").text("Fun!");
-    schedule_animation_refresh(ctx);
-    // do_checkbox(ctx, get_state(ctx, false), "Abacadaba");
+    // schedule_animation_refresh(ctx);
 }
 
 int
