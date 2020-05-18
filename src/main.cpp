@@ -48,7 +48,7 @@ do_checkbox_(dom::context ctx, duplex<bool> value, readable<std::string> label)
                 .attr("id", "custom-check-1")
                 .prop("indeterminate", !determinate)
                 .prop("checked", checked)
-                .callback("onchange", [&](emscripten::val e) {
+                .callback("change", [&](emscripten::val e) {
                     write_signal(value, e["target"]["checked"].as<bool>());
                 });
             element(ctx, "label")
@@ -74,7 +74,7 @@ do_link_(dom::context ctx, readable<std::string> text, action<> on_click)
             .attr("disabled", on_click.is_ready() ? "false" : "true")
             .children([&](auto ctx) { text_node(ctx, text); })
             .callback(
-                "onclick", [&](emscripten::val) { perform_action(on_click); });
+                "click", [&](emscripten::val) { perform_action(on_click); });
     });
 }
 
@@ -347,8 +347,15 @@ do_content_ui(dom::context ctx)
         .text(conditional(state, "On!", "Off!"));
 
     do_checkbox(ctx, state, "Abacadaba");
+    // alia_if (state)
+    // {
+    //     element(ctx, "h4")
+    //         .attr("class", "header-title")
+    //         .text(conditional(state, "On!", "Off!"));
+    // }
+    // alia_end
 
-    for (int i = 0; i != 10; ++i)
+    for (int i = 0; i != 1000; ++i)
         element(ctx, "h4").attr("class", "header-title").text("Fun!");
     // schedule_animation_refresh(ctx);
 }

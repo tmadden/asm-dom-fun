@@ -5,6 +5,8 @@
 #include "asm-dom.hpp"
 #include "color.hpp"
 
+#include <functional>
+
 #include <emscripten/emscripten.h>
 #include <emscripten/val.h>
 
@@ -22,10 +24,10 @@ typedef alia::extend_context_type_t<alia::context, tree_traversal_tag> context;
 
 struct dom_event : targeted_event
 {
-    dom_event(emscripten::val val) : val(val)
+    dom_event(emscripten::val event) : event(event)
     {
     }
-    emscripten::val val;
+    emscripten::val event;
 };
 
 struct element_object
@@ -88,11 +90,18 @@ text_node(dom::context ctx, Text text)
     text_node_(ctx, signalize(text));
 }
 
+struct callback_data
+{
+    component_identity identity;
+    std::function<void(emscripten::val)> callback;
+};
+
 struct element : noncopyable
 {
     element(dom::context ctx, char const* type) : ctx_(ctx)
     {
-        if (get_cached_data(ctx, &node_))
+        initializing_ = get_cached_data(ctx, &node_);
+        if (initializing_)
             node_->object.create_as_element(type);
         if (is_refresh_event(ctx))
             refresh_tree_node(get<tree_traversal_tag>(ctx), *node_);
@@ -101,41 +110,12 @@ struct element : noncopyable
     element&
     attr_(char const* name, readable<string> value)
     {
-        refresh_signal_shadow(
-            get_cached_data<captured_id>(ctx_),
-            value,
-            [&](string const& new_value) {
-                std::cout << "attr: " << name << " to " << new_value << "\n";
-                EM_ASM_(
-                    {
-                        Module.setAttribute(
-                            $0,
-                            Module['UTF8ToString']($1),
-                            Module['UTF8ToString']($2));
-                    },
-                    node_->object.js_id,
-                    name,
-                    new_value.c_str());
-            },
-            [&]() {
-                std::cout << "attr: " << name << " to indeterminate\n";
-                EM_ASM_(
-                    { Module.removeAttribute($0, Module['UTF8ToString']($1)); },
-                    node_->object.js_id,
-                    name);
-            });
-        return *this;
-    }
-    element&
-    attr_(char const* name, readable<bool> value)
-    {
-        refresh_signal_shadow(
-            get_cached_data<captured_id>(ctx_),
-            value,
-            [&](bool new_value) {
-                std::cout << "attr: " << name << " to " << new_value << "\n";
-                if (new_value)
-                {
+        auto& stored_id = get_cached_data<captured_id>(ctx_);
+        on_refresh(ctx_, [&](auto ctx) {
+            refresh_signal_shadow(
+                stored_id,
+                value,
+                [&](string const& new_value) {
                     EM_ASM_(
                         {
                             Module.setAttribute(
@@ -145,10 +125,9 @@ struct element : noncopyable
                         },
                         node_->object.js_id,
                         name,
-                        "");
-                }
-                else
-                {
+                        new_value.c_str());
+                },
+                [&]() {
                     EM_ASM_(
                         {
                             Module.removeAttribute(
@@ -156,9 +135,45 @@ struct element : noncopyable
                         },
                         node_->object.js_id,
                         name);
-                }
-            },
-            [&]() { std::cout << "attr: " << name << " to indeterminate\n"; });
+                });
+        });
+        return *this;
+    }
+    element&
+    attr_(char const* name, readable<bool> value)
+    {
+        auto& stored_id = get_cached_data<captured_id>(ctx_);
+        on_refresh(ctx_, [&](auto ctx) {
+            refresh_signal_shadow(
+                stored_id,
+                value,
+                [&](bool new_value) {
+                    if (new_value)
+                    {
+                        EM_ASM_(
+                            {
+                                Module.setAttribute(
+                                    $0,
+                                    Module['UTF8ToString']($1),
+                                    Module['UTF8ToString']($2));
+                            },
+                            node_->object.js_id,
+                            name,
+                            "");
+                    }
+                    else
+                    {
+                        EM_ASM_(
+                            {
+                                Module.removeAttribute(
+                                    $0, Module['UTF8ToString']($1));
+                            },
+                            node_->object.js_id,
+                            name);
+                    }
+                },
+                [&]() {});
+        });
         return *this;
     }
     template<class Value>
@@ -172,33 +187,40 @@ struct element : noncopyable
     element&
     prop(char const* name, Value value)
     {
-        auto value_ = signalize(value);
-        // refresh_signal_shadow(
-        //     get_cached_data<captured_id>(ctx_),
-        //     value_,
-        //     [&](Value const& new_value) {
-        //         // EM_ASM_(
-        //         //     { Module.nodes[$0][$1] = $2; },
-        //         //     node_->object.js_id,
-        //         //     name,
-        //         //     new_value);
-        //         std::cout << "prop: " << name << " to " << new_value << "\n";
-        //         std::cout << emscripten::val::global(
-        //                          "window")["asmDomHelpers"]["nodes"]
-        //                                   [node_->object.js_id]["id"]
-        //                                       .as<std::string>()
-        //                   << "\n";
-        //         // TODO: Need to deal with asmDomRaws.
-        //         emscripten::val::global(
-        //             "window")["asmDomHelpers"]["nodes"][node_->object.js_id]
-        //             .set(name, emscripten::val(new_value));
-        //     },
-        //     [&]() {
-        //         EM_ASM_(
-        //             { Module.nodes[$0][$1] = emscripten::val::undefined(); },
-        //             node_->object.js_id,
-        //             name);
-        //     });
+        auto& stored_id = get_cached_data<captured_id>(ctx_);
+        on_refresh(ctx_, [&](auto ctx) {
+            auto value_ = signalize(value);
+            refresh_signal_shadow(
+                stored_id,
+                value_,
+                [&](Value const& new_value) {
+                    // EM_ASM_(
+                    //     { Module.nodes[$0][$1] = $2; },
+                    //     node_->object.js_id,
+                    //     name,
+                    //     new_value);
+                    // std::cout << "prop: " << name << " to " << new_value
+                    //           << "\n";
+                    // std::cout << emscripten::val::global(
+                    //                  "window")["asmDomHelpers"]["nodes"]
+                    //                           [node_->object.js_id]["id"]
+                    //                               .as<std::string>()
+                    //           << "\n";
+                    // TODO: Need to deal with asmDomRaws.
+                    emscripten::val::global(
+                        "window")["asmDomHelpers"]["nodes"][node_->object.js_id]
+                        .set(name, emscripten::val(new_value));
+                },
+                [&]() {
+                    // TODO: Need to deal with asmDomRaws.
+                    EM_ASM_(
+                        {
+                            Module.nodes[$0][$1] = emscripten::val::undefined();
+                        },
+                        node_->object.js_id,
+                        name);
+                });
+        });
         return *this;
     }
 
@@ -216,18 +238,38 @@ struct element : noncopyable
 
     template<class Function>
     void
-    callback(char const* event, Function&& fn)
+    callback(char const* event_type, Function&& fn)
     {
-        // auto id = get_component_id(ctx_);
-        // auto external_id = externalize(id);
-        // auto* system = &get<system_tag>(ctx_);
-        // callbacks_["onclick"] = [=](emscripten::val v) {
-        //     dom_event event{std::move(v)};
-        //     dispatch_targeted_event(*system, event, external_id);
-        //     return true;
-        // };
-        // on_targeted_event<dom_event>(
-        //     ctx_, id, [&](auto ctx, auto& e) { fn(e.val); });
+        auto& data = get_cached_data<callback_data>(ctx_);
+        if (initializing_)
+        {
+            auto external_id = externalize(&data.identity);
+            auto* system = &get<system_tag>(ctx_);
+            data.callback = [=](emscripten::val v) {
+                dom_event event(v);
+                dispatch_targeted_event(*system, event, external_id);
+            };
+            EM_ASM_(
+                {
+                    // TODO: Need to deal with asmDomEvents.
+                    var element = Module.nodes[$0];
+                    var type = Module['UTF8ToString']($2);
+                    element.addEventListener(
+                        type, function(e) {
+                            var start = window.performance.now();
+                            Module.callback_proxy($1, e);
+                            var end = window.performance.now();
+                            console.log(
+                                "total event time: "
+                                + (((end - start) * 1000) | 0) + "[µs]");
+                        })
+                },
+                node_->object.js_id,
+                reinterpret_cast<std::uintptr_t>(&data.callback),
+                event_type);
+        }
+        on_targeted_event<dom_event>(
+            ctx_, &data.identity, [&](auto ctx, auto& e) { fn(e.event); });
     }
 
     template<class Text>
@@ -240,7 +282,8 @@ struct element : noncopyable
  private:
     dom::context ctx_;
     tree_node<element_object>* node_;
-};
+    bool initializing_;
+}; // namespace dom
 
 // void
 // do_text_(dom::context ctx, readable<std::string> text);

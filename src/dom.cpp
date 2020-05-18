@@ -1,11 +1,24 @@
 #include "dom.hpp"
 
+#include <emscripten/bind.h>
 #include <emscripten/emscripten.h>
 #include <emscripten/val.h>
 
 #include <chrono>
 
 namespace dom {
+
+void
+callback_proxy(std::uintptr_t callback, emscripten::val event)
+{
+    (*reinterpret_cast<std::function<void(emscripten::val)>*>(callback))(event);
+};
+
+EMSCRIPTEN_BINDINGS(callback_proxy)
+{
+    emscripten::function(
+        "callback_proxy", &callback_proxy, emscripten::allow_raw_pointers());
+};
 
 struct text_node_data
 {
