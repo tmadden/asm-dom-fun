@@ -342,21 +342,28 @@ do_content_ui(dom::context ctx)
     // if (timer.is_triggered())
     //     abort_traversal(ctx);
 
+    auto n = get_state(ctx, empty<int>());
+    do_input(ctx, n);
+
+    ALIA_IF(n > 12)
+    {
+        element(ctx, "h4").attr("class", "header-title").text("HIGH!");
+    }
+    ALIA_END
+
     element(ctx, "h4")
         .attr("class", "header-title")
         .text(conditional(state, "On!", "Off!"));
 
     do_checkbox(ctx, state, "Abacadaba");
-    // alia_if (state)
-    // {
-    //     element(ctx, "h4")
-    //         .attr("class", "header-title")
-    //         .text(conditional(state, "On!", "Off!"));
-    // }
-    // alia_end
 
-    for (int i = 0; i != 1000; ++i)
+    element(ctx, "div").attr("class", "button-list").children([&](auto ctx) {
+        do_button(ctx, "Toggle!", toggle(state));
+    });
+
+    for (int i = 0; i != 10; ++i)
         element(ctx, "h4").attr("class", "header-title").text("Fun!");
+
     // schedule_animation_refresh(ctx);
 }
 

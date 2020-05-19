@@ -237,7 +237,7 @@ struct element : noncopyable
     }
 
     template<class Function>
-    void
+    element&
     callback(char const* event_type, Function&& fn)
     {
         auto& data = get_cached_data<callback_data>(ctx_);
@@ -270,13 +270,14 @@ struct element : noncopyable
         }
         on_targeted_event<dom_event>(
             ctx_, &data.identity, [&](auto ctx, auto& e) { fn(e.event); });
+        return *this;
     }
 
     template<class Text>
-    void
+    element&
     text(Text text)
     {
-        children([&](auto ctx) { text_node(ctx, text); });
+        return children([&](auto ctx) { text_node(ctx, text); });
     }
 
  private:
@@ -307,29 +308,28 @@ struct element : noncopyable
 //     do_heading_(ctx, signalize(level), as_text(ctx, signalize(text)));
 // }
 
-// void
-// do_input_(dom::context ctx, duplex<string> value);
+void
+do_input_(dom::context ctx, duplex<string> value);
 
-// template<class Signal>
-// void
-// do_input(dom::context ctx, Signal signal)
-// {
-//     do_input_(ctx, as_duplex_text(ctx, signal));
-// }
+template<class Signal>
+void
+do_input(dom::context ctx, Signal signal)
+{
+    do_input_(ctx, as_duplex_text(ctx, signal));
+}
 
 // void
 // do_checkbox(dom::context ctx, duplex<bool> value);
 
-// void
-// do_button_(dom::context ctx, readable<std::string> text, action<>
-// on_click);
+void
+do_button_(dom::context ctx, readable<std::string> text, action<> on_click);
 
-// template<class Text>
-// void
-// do_button(dom::context ctx, Text text, action<> on_click)
-// {
-//     do_button_(ctx, signalize(text), on_click);
-// }
+template<class Text>
+void
+do_button(dom::context ctx, Text text, action<> on_click)
+{
+    do_button_(ctx, signalize(text), on_click);
+}
 
 // void
 // do_link_(dom::context ctx, readable<std::string> text, action<>

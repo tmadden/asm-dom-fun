@@ -51,124 +51,66 @@ text_node_(dom::context ctx, readable<string> text)
     }
 }
 
-// struct input_data
-// {
-//     component_identity identity;
-//     captured_id external_id;
-//     string value;
-//     bool invalid = false;
-//     element_data element;
-//     unsigned version = 0;
-// };
+struct input_data
+{
+    captured_id value_id;
+    string value;
+    bool invalid = false;
+    unsigned version = 0;
+};
 
-// template<class Value>
-// struct value_update_event : targeted_event
-// {
-//     Value value;
-// };
+void
+do_input_(dom::context ctx, duplex<string> value)
+{
+    input_data* data;
+    get_cached_data(ctx, &data);
 
-// void
-// do_input_(dom::context ctx, duplex<string> value)
-// {
-//     input_data* data;
-//     get_cached_data(ctx, &data);
+    on_refresh(ctx, [&](auto ctx) {
+        refresh_signal_shadow(
+            data->value_id,
+            value,
+            [&](string new_value) {
+                data->value = std::move(new_value);
+                data->invalid = false;
+                ++data->version;
+            },
+            [&]() {
+                data->value.clear();
+                data->invalid = false;
+                ++data->version;
+            });
+    });
 
-//     on_refresh(ctx, [&](auto ctx) {
-//         refresh_component_identity(ctx, data->identity);
+    element(ctx, "input")
+        .attr("class", mask("invalid-input", data->invalid))
+        .prop("value", data->value)
+        .callback("input", [=](emscripten::val& e) {
+            auto new_value = e["target"]["value"].as<std::string>();
+            if (signal_ready_to_write(value))
+            {
+                try
+                {
+                    write_signal(value, new_value);
+                }
+                catch (validation_error&)
+                {
+                    data->invalid = true;
+                }
+            }
+            data->value = new_value;
+            ++data->version;
+        });
+}
 
-//         refresh_signal_shadow(
-//             data->external_id,
-//             value,
-//             [&](string new_value) {
-//                 data->value = std::move(new_value);
-//                 data->invalid = false;
-//                 ++data->version;
-//             },
-//             [&]() {
-//                 data->value.clear();
-//                 data->invalid = false;
-//                 ++data->version;
-//             });
-//     });
-
-//     auto* system = &ctx.get<system_tag>();
-//     auto external_id = externalize(&data->identity);
-
-//     add_element(ctx, data->element, make_id(data->version), [&]() {
-//         asmdom::Attrs attrs;
-//         if (data->invalid)
-//             attrs["class"] = "invalid-input";
-//         return asmdom::h(
-//             "input",
-//             asmdom::Data(
-//                 attrs,
-//                 asmdom::Props{{"value", emscripten::val(data->value)}},
-//                 asmdom::Callbacks{
-//                     {"oninput", [=](emscripten::val e) {
-//                          value_update_event<std::string> update;
-//                          update.value =
-//                          e["target"]["value"].as<std::string>();
-//                          dispatch_targeted_event(*system, update,
-//                          external_id); return true;
-//                      }}}));
-//     });
-//     on_targeted_event<value_update_event<std::string>>(
-//         ctx, &data->identity, [=](auto ctx, auto& e) {
-//             if (signal_ready_to_write(value))
-//             {
-//                 try
-//                 {
-//                     write_signal(value, e.value);
-//                 }
-//                 catch (validation_error&)
-//                 {
-//                     data->invalid = true;
-//                 }
-//             }
-//             data->value = e.value;
-//             ++data->version;
-//         });
-// }
-
-// void
-// do_button_(dom::context ctx, readable<std::string> text, action<> on_click)
-// {
-//     auto id = get_component_id(ctx);
-//     auto external_id = externalize(id);
-//     auto* system = &ctx.get<system_tag>();
-
-//     element_data* element;
-//     get_cached_data(ctx, &element);
-
-//     if (signal_has_value(text))
-//     {
-//         add_element(
-//             ctx,
-//             *element,
-//             combine_ids(ref(text.value_id()), make_id(on_click.is_ready())),
-//             [=]() {
-//                 return asmdom::h(
-//                     "button",
-//                     asmdom::Data(
-//                         asmdom::Attrs{{"class", "btn btn-secondary"},
-//                                       {"disabled",
-//                                        on_click.is_ready() ? "false" :
-//                                        "true"}},
-//                         asmdom::Callbacks{{"onclick",
-//                                            [=](emscripten::val) {
-//                                                click_event click;
-//                                                dispatch_targeted_event(
-//                                                    *system, click,
-//                                                    external_id);
-//                                                return true;
-//                                            }}}),
-//                     read_signal(text));
-//             });
-//     }
-
-//     on_targeted_event<click_event>(
-//         ctx, id, [=](auto ctx, auto& e) { perform_action(on_click); });
-// }
+void
+do_button_(dom::context ctx, readable<std::string> text, action<> on_click)
+{
+    element(ctx, "button")
+        .attr("class", "btn btn-secondary")
+        .attr("disabled", !on_click.is_ready())
+        .callback("click", [&](auto& e) { perform_action(on_click); })
+        .text(text);
+}
 
 // void
 // do_link_(dom::context ctx, readable<std::string> text, action<> on_click)
@@ -361,19 +303,19 @@ system::operator()(alia::context vanilla_ctx)
 
     if (is_refresh_event(ctx))
     {
-        std::chrono::steady_clock::time_point begin
-            = std::chrono::steady_clock::now();
+        // std::chrono::steady_clock::time_point begin
+        //     = std::chrono::steady_clock::now();
 
         traverse_object_tree(
             traversal, this->root_node, [&]() { this->controller(ctx); });
 
-        std::chrono::steady_clock::time_point end
-            = std::chrono::steady_clock::now();
-        std::cout << "refresh time: "
-                  << std::chrono::duration_cast<std::chrono::microseconds>(
-                         end - begin)
-                         .count()
-                  << "[µs]" << std::endl;
+        // std::chrono::steady_clock::time_point end
+        //     = std::chrono::steady_clock::now();
+        // std::cout << "refresh time: "
+        //           << std::chrono::duration_cast<std::chrono::microseconds>(
+        //                  end - begin)
+        //                  .count()
+        //           << "[µs]" << std::endl;
     }
     else
     {
@@ -388,7 +330,7 @@ initialize(
     std::string const& dom_node_id,
     std::function<void(dom::context)> controller)
 {
-    // Initialize asm - dom(once).
+    // Initialize asm-dom (once).
     static bool asmdom_initialized = false;
     if (!asmdom_initialized)
     {
