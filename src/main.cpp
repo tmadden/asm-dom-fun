@@ -357,8 +357,24 @@ do_content_ui(dom::context ctx)
 
     do_checkbox(ctx, state, "Abacadaba");
 
+    auto storage_value = get_state(ctx, "");
+    do_input(ctx, storage_value);
+
     element(ctx, "div").attr("class", "button-list").children([&](auto ctx) {
-        do_button(ctx, "Toggle!", toggle(state));
+        do_button(ctx, "Store!", lambda_action([&] {
+                      emscripten::val::global("localStorage")
+                          .call<void>(
+                              "setItem",
+                              emscripten::val("my_key"),
+                              emscripten::val(read_signal(storage_value)));
+                  }));
+        do_button(ctx, "Retrieve!", lambda_action([&] {
+                      write_signal(
+                          storage_value,
+                          emscripten::val::global("localStorage")
+                              .call<std::string>(
+                                  "getItem", emscripten::val("my_key")));
+                  }));
     });
 
     for (int i = 0; i != 10; ++i)
