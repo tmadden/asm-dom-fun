@@ -32,60 +32,6 @@ using namespace dom;
 //////
 
 void
-do_checkbox_(dom::context ctx, duplex<bool> value, readable<std::string> label)
-{
-    bool determinate = value.has_value();
-    bool checked = determinate && value.read();
-    bool disabled = !value.ready_to_write();
-
-    element(ctx, "div")
-        .attr("class", "custom-control custom-checkbox")
-        .children([&](auto ctx) {
-            element(ctx, "input")
-                .attr("type", "checkbox")
-                .attr("class", "custom-control-input")
-                .attr("disabled", disabled)
-                .attr("id", "custom-check-1")
-                .prop("indeterminate", !determinate)
-                .prop("checked", checked)
-                .callback("change", [&](emscripten::val e) {
-                    write_signal(value, e["target"]["checked"].as<bool>());
-                });
-            element(ctx, "label")
-                .attr("class", "custom-control-label")
-                .attr("for", "custom-check-1")
-                .text(label);
-        });
-}
-
-template<class Label>
-void
-do_checkbox(dom::context ctx, duplex<bool> value, Label label)
-{
-    do_checkbox_(ctx, value, signalize(label));
-}
-
-void
-do_link_(dom::context ctx, readable<std::string> text, action<> on_click)
-{
-    element(ctx, "li").children([&](auto ctx) {
-        element(ctx, "a")
-            .attr("href", "javascript: void(0);")
-            .attr("disabled", on_click.is_ready() ? "false" : "true")
-            .children([&](auto ctx) { text_node(ctx, text); })
-            .callback(
-                "click", [&](emscripten::val) { perform_action(on_click); });
-    });
-}
-
-template<class Text>
-void
-do_link(dom::context ctx, Text text, action<> on_click)
-{
-    do_link_(ctx, signalize(text), on_click);
-}
-
-void
 do_ui(dom::context ctx)
 {
     // std::cout << "ticks: " << get_millisecond_counter() << std::endl;
@@ -194,120 +140,6 @@ do_ui(dom::context ctx)
     // do_button(ctx, "reset"_a, x <<= value(4));
 }
 
-// void
-// refresh()
-// {
-//     // {
-//     //     div top_level(ctx, {{"class", "container"}});
-
-//     //     h4(ctx, std::to_string(i));
-
-//     //     {
-//     //         p button_row(ctx);
-//     //         button(
-//     //             ctx,
-//     //             {{"class", "btn btn-primary mr-1"}},
-//     //             {{"onclick", i <<= i - 1}},
-//     //             "decrease");
-//     //         button(
-//     //             ctx,
-//     //             {{"class", "btn btn-secondary"}},
-//     //             {{"onclick", i <<= i - 1}},
-//     //             "increase");
-//     //     }
-
-//     //     p(ctx, [&](auto ctx) {
-//     //         button(
-//     //             ctx,
-//     //             {{"class", "btn btn-primary mr-1"}},
-//     //             {{"onclick", i <<= i - 1}},
-//     //             "decrease");
-//     //         button(
-//     //             ctx,
-//     //             {{"class", "btn btn-secondary"}},
-//     //             {{"onclick", i <<= i - 1}},
-//     //             "increase");
-//     //     });
-
-//     //     p(ctx, [&](auto ctx) {
-//     //         button(
-//     //             ctx,
-//     //             {_class = "btn btn-primary mr-1"},
-//     //             {_onclick = i <<= i - 1},
-//     //             "decrease");
-//     //         button(
-//     //             ctx,
-//     //             {_class = "btn btn-secondary"},
-//     //             {_onclick = i <<= i - 1},
-//     //             "increase");
-//     //     });
-
-//     //     do_action_list(ctx);
-//     // }
-
-//     // asmdom::Children action_list;
-//     // for (int i = std::max(0, int(actions.size()) - 10); i <
-//     actions.size();
-//     // ++i)
-//     // {
-//     //     action_list.push_back(asmdom::h(
-//     //         "li",
-//     //         asmdom::Data(asmdom::Attrs{{"class",
-//     "list-group-item"}}),
-//     //         actions[i]));
-//     // }
-
-//     // asmdom::VNode* new_node = asmdom::h(
-//     //     "div",
-//     //     asmdom::Data(asmdom::Attrs{{"class", "container"}}),
-//     //     asmdom::Children{
-//     //         asmdom::h("h4", std::string(std::to_string(i))),
-//     //         asmdom::h(
-//     //             "p",
-//     //             asmdom::Children{
-//     //                 asmdom::h(
-//     //                     "button",
-//     //                     asmdom::Data(
-//     //                         asmdom::Attrs{{"class", "btn
-//     btn-primary mr-1"}},
-//     //                         asmdom::Callbacks{{"onclick",
-//     decrease}}),
-//     //                     std::string("decrease")),
-//     //                 asmdom::h(
-//     //                     "button",
-//     //                     asmdom::Data(
-//     //                         asmdom::Attrs{{"class", "btn
-//     btn-secondary"}},
-//     //                         asmdom::Callbacks{{"onclick",
-//     increase}}),
-//     //                     std::string("increase"))}),
-//     //         asmdom::h(
-//     //             "ul",
-//     //             asmdom::Data(asmdom::Attrs{{"class",
-//     "list-group"}}),
-//     //             action_list)});
-
-//     // asmdom::patch(current_view, new_node);
-//     // current_view = new_node;
-// }
-
-// static void
-// download_succeeded(emscripten_fetch_t* fetch)
-// {
-//     actions.push_back("download succeeded");
-//     actions.push_back(std::string(fetch->data, fetch->numBytes));
-//     emscripten_fetch_close(fetch); // Free data associated with the fetch.
-//     refresh();
-// }
-
-// static void
-// download_failed(emscripten_fetch_t* fetch)
-// {
-//     actions.push_back("download failed");
-//     emscripten_fetch_close(fetch); // Also free data on failure.
-//     refresh();
-// }
-
 void
 do_nav_ui(dom::context ctx)
 {
@@ -315,19 +147,6 @@ do_nav_ui(dom::context ctx)
         = lambda_action([]() { std::cout << "It worked!!" << std::endl; });
 
     do_link(ctx, "Just Testing", on_click);
-}
-
-void
-do_heading_(dom::context ctx, char const* level, readable<std::string> text)
-{
-    element(ctx, level).text(text);
-}
-
-template<class Text>
-void
-do_heading(dom::context ctx, char const* level, Text text)
-{
-    do_heading_(ctx, level, as_text(ctx, signalize(text)));
 }
 
 void

@@ -20,6 +20,44 @@ EMSCRIPTEN_BINDINGS(callback_proxy)
         "callback_proxy", &callback_proxy, emscripten::allow_raw_pointers());
 };
 
+void
+install_element_callback(
+    context ctx,
+    element_object& object,
+    callback_data& data,
+    char const* event_type)
+{
+    auto external_id = externalize(&data.identity);
+    auto* system = &get<system_tag>(ctx);
+    data.callback = [=](emscripten::val v) {
+        dom_event event(v);
+        dispatch_targeted_event(*system, event, external_id);
+    };
+    EM_ASM_(
+        {
+            const element = Module.nodes[$0];
+            const type = Module['UTF8ToString']($2);
+            const handler = function(e)
+            {
+                const start = window.performance.now();
+                Module.callback_proxy($1, e);
+                const end = window.performance.now();
+                console.log(
+                    "total event time: " + (((end - start) * 1000) | 0)
+                    + "[µs]");
+            };
+            element.addEventListener(type, handler);
+            // Add this asm-dom's event list so that it knows to
+            // clear it out before recycling this DOM node.
+            if (!element.hasOwnProperty('asmDomEvents'))
+                element['asmDomEvents'] = {};
+            element['asmDomEvents'][type] = handler;
+        },
+        object.js_id,
+        reinterpret_cast<std::uintptr_t>(&data.callback),
+        event_type);
+}
+
 struct text_node_data
 {
     tree_node<element_object> node;
@@ -49,6 +87,77 @@ text_node_(dom::context ctx, readable<string> text)
                     { Module.setNodeValue($0, ""); }, data->node.object.js_id);
             });
     }
+}
+
+void
+do_element_attribute(
+    context ctx,
+    element_object& object,
+    char const* name,
+    readable<string> value)
+{
+    auto& stored_id = get_cached_data<captured_id>(ctx);
+    on_refresh(ctx, [&](auto ctx) {
+        refresh_signal_shadow(
+            stored_id,
+            value,
+            [&](string const& new_value) {
+                EM_ASM_(
+                    {
+                        Module.setAttribute(
+                            $0,
+                            Module['UTF8ToString']($1),
+                            Module['UTF8ToString']($2));
+                    },
+                    object.js_id,
+                    name,
+                    new_value.c_str());
+            },
+            [&]() {
+                EM_ASM_(
+                    { Module.removeAttribute($0, Module['UTF8ToString']($1)); },
+                    object.js_id,
+                    name);
+            });
+    });
+}
+
+void
+do_element_attribute(
+    context ctx, element_object& object, char const* name, readable<bool> value)
+{
+    auto& stored_id = get_cached_data<captured_id>(ctx);
+    on_refresh(ctx, [&](auto ctx) {
+        refresh_signal_shadow(
+            stored_id,
+            value,
+            [&](bool new_value) {
+                if (new_value)
+                {
+                    EM_ASM_(
+                        {
+                            Module.setAttribute(
+                                $0,
+                                Module['UTF8ToString']($1),
+                                Module['UTF8ToString']($2));
+                        },
+                        object.js_id,
+                        name,
+                        "");
+                }
+                else
+                {
+                    EM_ASM_(
+                        {
+                            Module.removeAttribute(
+                                $0, Module['UTF8ToString']($1));
+                        },
+                        object.js_id,
+                        name);
+                }
+            },
+            [&]() {});
+    });
 }
 
 struct input_data
@@ -112,55 +221,45 @@ do_button_(dom::context ctx, readable<std::string> text, action<> on_click)
         .text(text);
 }
 
-// void
-// do_link_(dom::context ctx, readable<std::string> text, action<> on_click)
-// {
-//     auto id = get_component_id(ctx);
-//     auto external_id = externalize(id);
-//     auto* system = &ctx.get<system_tag>();
+void
+do_checkbox_(dom::context ctx, duplex<bool> value, readable<std::string> label)
+{
+    bool determinate = value.has_value();
+    bool checked = determinate && value.read();
+    bool disabled = !value.ready_to_write();
 
-//     element_data* element;
-//     get_cached_data(ctx, &element);
+    element(ctx, "div")
+        .attr("class", "custom-control custom-checkbox")
+        .children([&](auto ctx) {
+            element(ctx, "input")
+                .attr("type", "checkbox")
+                .attr("class", "custom-control-input")
+                .attr("disabled", disabled)
+                .attr("id", "custom-check-1")
+                .prop("indeterminate", !determinate)
+                .prop("checked", checked)
+                .callback("change", [&](emscripten::val e) {
+                    write_signal(value, e["target"]["checked"].as<bool>());
+                });
+            element(ctx, "label")
+                .attr("class", "custom-control-label")
+                .attr("for", "custom-check-1")
+                .text(label);
+        });
+}
 
-//     if (signal_has_value(text))
-//     {
-//         add_element(
-//             ctx,
-//             *element,
-//             combine_ids(ref(text.value_id()), make_id(on_click.is_ready())),
-//             [=]() {
-//                 return asmdom::h(
-//                     "li",
-//                     asmdom::Children({asmdom::h(
-//                         "a",
-//                         asmdom::Data(
-//                             asmdom::Attrs{
-//                                 {"href", "javascript: void(0);"},
-//                                 {"disabled",
-//                                  on_click.is_ready() ? "false" : "true"}},
-//                             asmdom::Callbacks{{"onclick",
-//                                                [=](emscripten::val) {
-//                                                    click_event click;
-//                                                    dispatch_targeted_event(
-//                                                        *system,
-//                                                        click,
-//                                                        external_id);
-//                                                    return true;
-//                                                }}}),
-//                         read_signal(text))}));
-//             });
-//     }
-
-//     on_targeted_event<click_event>(
-//         ctx, id, [=](auto ctx, auto& e) { perform_action(on_click); });
-// }
-
-// template<class Text>
-// void
-// do_link(dom::context ctx, Text text, action<> on_click)
-// {
-//     do_link_(ctx, signalize(text), on_click);
-// }
+void
+do_link_(dom::context ctx, readable<std::string> text, action<> on_click)
+{
+    element(ctx, "li").children([&](auto ctx) {
+        element(ctx, "a")
+            .attr("href", "javascript: void(0);")
+            .attr("disabled", on_click.is_ready() ? "false" : "true")
+            .children([&](auto ctx) { text_node(ctx, text); })
+            .callback(
+                "click", [&](emscripten::val) { perform_action(on_click); });
+    });
+}
 
 // void
 // do_colored_box(dom::context ctx, readable<rgb8> color)
@@ -185,14 +284,6 @@ do_button_(dom::context ctx, readable<std::string> text, action<> on_click)
 //                     asmdom::Attrs{{"class", "colored-box"}, {"style",
 //                     style}}));
 //         });
-// }
-
-// void
-// do_hr(dom::context ctx)
-// {
-//     add_element(ctx, get_cached_data<element_data>(ctx), unit_id, [=]() {
-//         return asmdom::h("hr");
-//     });
 // }
 
 // struct div_data
