@@ -36,6 +36,15 @@ struct callback_data
     std::function<void(emscripten::val)> callback;
 };
 
+void
+install_element_callback(
+    context ctx,
+    element_object& object,
+    callback_data& data,
+    char const* event_type);
+
+
+
 struct element_object
 {
     void
@@ -82,8 +91,6 @@ struct element_object
     }
 
     int js_id = 0;
-    element_object* next = nullptr;
-    element_object* children = nullptr;
 };
 
 void
@@ -110,6 +117,30 @@ do_element_attribute(
     char const* name,
     readable<bool> value);
 
+void
+set_element_property(
+    element_object& object, char const* name, emscripten::val value);
+
+void
+clear_element_property(element_object& object, char const* name);
+
+template<class Value>
+void
+do_element_property(
+    context ctx, element_object& object, char const* name, Value const& value)
+{
+    auto& stored_id = get_cached_data<captured_id>(ctx);
+    on_refresh(ctx, [&](auto ctx) {
+        refresh_signal_shadow(
+            stored_id,
+            value,
+            [&](auto const& new_value) {
+                set_element_property(object, name, emscripten::val(new_value));
+            },
+            [&]() { clear_element_property(object, name); });
+    });
+}
+
 template<class Context>
 struct element_handle : noncopyable
 {
@@ -134,60 +165,7 @@ struct element_handle : noncopyable
     element_handle&
     prop(char const* name, Value value)
     {
-        auto& stored_id = get_cached_data<captured_id>(ctx_);
-        on_refresh(ctx_, [&](auto ctx) {
-            auto value_ = signalize(value);
-            refresh_signal_shadow(
-                stored_id,
-                value_,
-                [&](Value const& new_value) {
-                    emscripten::val::global(
-                        "window")["asmDomHelpers"]["nodes"][node_->object.js_id]
-                        .set(name, emscripten::val(new_value));
-                    // Add the property name to the element's 'asmDomRaws' list.
-                    // asm-dom uses this to track what it needs to clean up when
-                    // recycling a DOM node.
-                    EM_ASM_(
-                        {
-                            const element = Module.nodes[$0];
-                            if (!element.hasOwnProperty('asmDomRaws'))
-                                element['asmDomRaws'] = [];
-                            element['asmDomRaws'].push(
-                                Module['UTF8ToString']($1));
-                        },
-                        node_->object.js_id,
-                        name);
-                },
-                [&]() {
-                    EM_ASM_(
-                        {
-                            Module.nodes[$0][$1] = emscripten::val::undefined();
-                            // Remove the property name from the element's
-                            // 'asmDomRaws' list. (See above.)
-                            const asmDomRaws = Module.nodes[$0]['asmDomRaws'];
-                            const index = asmDomRaws.indexOf(
-                                Module['UTF8ToString']($1));
-                            if (index > -1)
-                            {
-                                asmDomRaws.splice(index, 1);
-                            }
-                        },
-                        node_->object.js_id,
-                        name);
-                });
-        });
-        return *this;
-    }
-
-    template<class Function>
-    element_handle&
-    children(Function&& fn)
-    {
-        auto& traversal = get<tree_traversal_tag>(ctx_);
-        scoped_tree_children<element_object> tree_scope;
-        if (is_refresh_event(ctx_))
-            tree_scope.begin(traversal, *node_);
-        fn(ctx_);
+        do_element_property(ctx_, node_->object, name, signalize(value));
         return *this;
     }
 
@@ -200,6 +178,18 @@ struct element_handle : noncopyable
             install_element_callback(ctx_, node_->object, data, event_type);
         on_targeted_event<dom_event>(
             ctx_, &data.identity, [&](auto ctx, auto& e) { fn(e.event); });
+        return *this;
+    }
+
+    template<class Function>
+    element_handle&
+    children(Function&& fn)
+    {
+        auto& traversal = get<tree_traversal_tag>(ctx_);
+        scoped_tree_children<element_object> tree_scope;
+        if (is_refresh_event(ctx_))
+            tree_scope.begin(traversal, *node_);
+        fn(ctx_);
         return *this;
     }
 
@@ -222,6 +212,74 @@ element(Context ctx, char const* type)
 {
     return element_handle<Context>(ctx, type);
 }
+
+struct scoped_element : noncopyable
+{
+    scoped_element()
+    {
+    }
+    scoped_element(context ctx, char const* type)
+    {
+        begin(ctx, type);
+    }
+    ~scoped_element()
+    {
+        end();
+    }
+
+    scoped_element&
+    begin(context ctx, char const* type)
+    {
+        ctx_.reset(ctx);
+        initializing_ = get_cached_data(ctx, &node_);
+        if (initializing_)
+            node_->object.create_as_element(type);
+        if (is_refresh_event(ctx))
+            tree_scoping_.begin(get<tree_traversal_tag>(ctx), *node_);
+        return *this;
+    }
+
+    void
+    end()
+    {
+        tree_scoping_.end();
+    }
+
+    template<class Value>
+    scoped_element&
+    attr(char const* name, Value value)
+    {
+        do_element_attribute(*ctx_, node_->object, name, signalize(value));
+        return *this;
+    }
+
+    template<class Value>
+    scoped_element&
+    prop(char const* name, Value value)
+    {
+        do_element_property(*ctx_, node_->object, name, signalize(value));
+        return *this;
+    }
+
+    template<class Function>
+    scoped_element&
+    callback(char const* event_type, Function&& fn)
+    {
+        auto ctx = *ctx_;
+        auto& data = get_cached_data<callback_data>(ctx);
+        if (initializing_)
+            install_element_callback(ctx, node_->object, data, event_type);
+        on_targeted_event<dom_event>(
+            ctx, &data.identity, [&](auto ctx, auto& e) { fn(e.event); });
+        return *this;
+    }
+
+ private:
+    optional_context<context> ctx_;
+    tree_node<element_object>* node_;
+    scoped_tree_node<element_object> tree_scoping_;
+    bool initializing_;
+};
 
 void
 do_input_(dom::context ctx, duplex<string> value);
@@ -266,45 +324,32 @@ do_link(dom::context ctx, Text text, action<> on_click)
     do_link_(ctx, signalize(text), on_click);
 }
 
-// void
-// do_colored_box(dom::context ctx, readable<rgb8> color);
+void
+do_colored_box(dom::context ctx, readable<rgb8> color);
 
-// struct div_data;
+struct div_data;
 
-// struct scoped_div : noncopyable
-// {
-//     scoped_div(dom::context ctx, readable<std::string> class_name)
-//     {
-//         begin(ctx, class_name);
-//     }
+struct scoped_div : scoped_element
+{
+    scoped_div()
+    {
+    }
+    scoped_div(dom::context ctx, readable<std::string> class_name)
+    {
+        begin(ctx, class_name);
+    }
+    ~scoped_div()
+    {
+        end();
+    }
 
-//     ~scoped_div()
-//     {
-//         end();
-//     }
-
-//     void
-//     begin(dom::context ctx, readable<std::string> class_name);
-
-//     void
-//     end();
-
-//  private:
-//     optional_context<dom::context> ctx_;
-//     div_data* data_ = nullptr;
-//     asmdom::Children* parent_children_list_ = nullptr;
-//     scoped_component_container container_;
-// };
-
-// template<class DoContents>
-// void
-// do_div(
-//     dom::context ctx, readable<std::string> class_name, DoContents
-//     do_contents)
-// {
-//     scoped_div div(ctx, class_name);
-//     do_contents(ctx);
-// }
+    scoped_div&
+    begin(dom::context ctx, readable<std::string> class_name)
+    {
+        this->scoped_element::begin(ctx, "div").attr("class", class_name);
+        return *this;
+    }
+};
 
 struct system
 {

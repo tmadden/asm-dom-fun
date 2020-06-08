@@ -47,8 +47,8 @@ install_element_callback(
                     + "[µs]");
             };
             element.addEventListener(type, handler);
-            // Add this asm-dom's event list so that it knows to
-            // clear it out before recycling this DOM node.
+            // Add the handler to asm-dom's event list so that it knows to clear
+            // it out before recycling this DOM node.
             if (!element.hasOwnProperty('asmDomEvents'))
                 element['asmDomEvents'] = {};
             element['asmDomEvents'][type] = handler;
@@ -160,6 +160,45 @@ do_element_attribute(
     });
 }
 
+void
+set_element_property(
+    element_object& object, char const* name, emscripten::val value)
+{
+    emscripten::val::global("window")["asmDomHelpers"]["nodes"][object.js_id]
+        .set(name, value);
+
+    // Add the property name to the element's 'asmDomRaws' list. asm-dom uses
+    // this to track what it needs to clean up when recycling a DOM node.
+    EM_ASM_(
+        {
+            const element = Module.nodes[$0];
+            if (!element.hasOwnProperty('asmDomRaws'))
+                element['asmDomRaws'] = [];
+            element['asmDomRaws'].push(Module['UTF8ToString']($1));
+        },
+        object.js_id,
+        name);
+}
+
+void
+clear_element_property(element_object& object, char const* name)
+{
+    EM_ASM_(
+        {
+            Module.nodes[$0][$1] = emscripten::val::undefined();
+
+            // Remove the property name from the element's 'asmDomRaws' list.
+            const asmDomRaws = Module.nodes[$0]['asmDomRaws'];
+            const index = asmDomRaws.indexOf(Module['UTF8ToString']($1));
+            if (index > -1)
+            {
+                asmDomRaws.splice(index, 1);
+            }
+        },
+        object.js_id,
+        name);
+}
+
 struct input_data
 {
     captured_id value_id;
@@ -191,7 +230,9 @@ do_input_(dom::context ctx, duplex<string> value)
     });
 
     element(ctx, "input")
-        .attr("class", mask("invalid-input", data->invalid))
+        .attr(
+            "class",
+            conditional(data->invalid, "invalid-input", "form-control"))
         .prop("value", data->value)
         .callback("input", [=](emscripten::val& e) {
             auto new_value = e["target"]["value"].as<std::string>();
@@ -261,83 +302,20 @@ do_link_(dom::context ctx, readable<std::string> text, action<> on_click)
     });
 }
 
-// void
-// do_colored_box(dom::context ctx, readable<rgb8> color)
-// {
-//     add_element(
-//         ctx, get_cached_data<element_data>(ctx), color.value_id(), [=]() {
-//             char style[64] = {'\0'};
-//             if (signal_has_value(color))
-//             {
-//                 rgb8 const& c = read_signal(color);
-//                 snprintf(
-//                     style,
-//                     64,
-//                     "background-color: #%02x%02x%02x",
-//                     c.r,
-//                     c.g,
-//                     c.b);
-//             }
-//             return asmdom::h(
-//                 "div",
-//                 asmdom::Data(
-//                     asmdom::Attrs{{"class", "colored-box"}, {"style",
-//                     style}}));
-//         });
-// }
-
-// struct div_data
-// {
-//     element_data element;
-//     keyed_data<std::string> class_name;
-//     asmdom::Children children_;
-// };
-
-// void
-// scoped_div::begin(dom::context ctx, readable<std::string> class_name)
-// {
-//     ctx_.reset(ctx);
-
-//     get_cached_data(ctx, &data_);
-
-//     on_refresh(ctx, [&](auto ctx) {
-//         auto& dom_context = get<tree_traversal_tag>(ctx);
-//         parent_children_list_ = dom_context.current_children;
-//         dom_context.current_children = &data_->children_;
-//         data_->children_.clear();
-
-//         refresh_keyed_data(data_->class_name, class_name.value_id());
-//         if (!is_valid(data_->class_name) && class_name.has_value())
-//             set(data_->class_name, class_name.read());
-//     });
-
-//     container_.begin(ctx);
-// }
-
-// void
-// scoped_div::end()
-// {
-//     if (ctx_)
-//     {
-//         dom::context ctx = *ctx_;
-
-//         container_.end();
-
-//         auto& dom_context = ctx.get<tree_traversal_tag>();
-//         dom_context.current_children = parent_children_list_;
-
-//         if (is_refresh_event(ctx))
-//         {
-//             asmdom::Attrs attrs;
-//             if (is_valid(data_->class_name))
-//                 attrs["class"] = get(data_->class_name);
-//             parent_children_list_->push_back(
-//                 asmdom::h("div", asmdom::Data(attrs), data_->children_));
-//         }
-
-//         ctx_.reset();
-//     }
-// }
+void
+do_colored_box(dom::context ctx, readable<rgb8> color)
+{
+    element(ctx, "div")
+        .attr("class", "colored-box")
+        .attr(
+            "style",
+            printf(
+                ctx,
+                "background-color: #%02x%02x%02x",
+                alia_field(color, r),
+                alia_field(color, g),
+                alia_field(color, b)));
+}
 
 static void
 refresh_for_emscripten(void* system)

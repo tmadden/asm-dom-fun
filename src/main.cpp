@@ -149,6 +149,46 @@ do_nav_ui(dom::context ctx)
     do_link(ctx, "Just Testing", on_click);
 }
 
+struct cached_content_data
+{
+    component_container_ptr container;
+    tree_caching_data<element_object> caching;
+};
+
+template<class Context, class Function>
+void
+do_cached_content(Context ctx, id_interface const& id, Function&& fn)
+{
+    cached_content_data* data;
+    if (get_data(ctx, &data))
+        data->container.reset(new component_container);
+
+    scoped_component_container container(ctx, &data->container);
+
+    scoped_tree_cacher<element_object> cacher;
+
+    bool content_traversal_required;
+    if (is_refresh_event(ctx))
+    {
+        cacher.begin(
+            get<tree_traversal_tag>(ctx),
+            data->caching,
+            id,
+            container.is_dirty());
+        content_traversal_required = cacher.content_traversal_required();
+    }
+    else
+    {
+        content_traversal_required = container.is_on_route();
+    }
+
+    ALIA_EVENT_DEPENDENT_IF(content_traversal_required)
+    {
+        fn(ctx);
+    }
+    ALIA_END
+}
+
 void
 do_content_ui(dom::context ctx)
 {
@@ -161,39 +201,68 @@ do_content_ui(dom::context ctx)
     // if (timer.is_triggered())
     //     abort_traversal(ctx);
 
-    auto n = get_state(ctx, empty<int>());
-    do_input(ctx, n);
-
-    ALIA_IF(n > 12)
+    auto color = get_state(ctx, value(rgb8(0, 0, 0)));
     {
-        element(ctx, "h4").attr("class", "header-title").text("HIGH!");
+        scoped_div buttons(ctx, value("button-container"));
+        do_button(ctx, "black"_a, color <<= value(rgb8(50, 50, 55)));
+        do_button(ctx, "white"_a, color <<= value(rgb8(230, 230, 255)));
     }
-    ALIA_END
+    do_colored_box(ctx, smooth(ctx, color));
+
+    auto n = get_state(ctx, empty<int>());
+    element(ctx, "div").attr("class", "form-group").children([&](auto ctx) {
+        do_input(ctx, n);
+    });
+
+    do_cached_content(ctx, n.value_id(), [&](auto ctx) {
+        std::cout << "Refreshing cached content..." << std::endl;
+
+        ALIA_IF(n > 12)
+        {
+            element(ctx, "h4").attr("class", "header-title").text("HIGH!");
+        }
+        ALIA_END
+
+        element(ctx, "h4")
+            .attr("class", "header-title")
+            .text(conditional(n > 2, "On!", "Off!"));
+    });
 
     element(ctx, "h4")
         .attr("class", "header-title")
         .text(conditional(state, "On!", "Off!"));
 
-    do_checkbox(ctx, state, "Abacadaba");
-
     auto storage_value = get_state(ctx, "");
-    do_input(ctx, storage_value);
+    element(ctx, "div").attr("class", "form-group").children([&](auto ctx) {
+        do_checkbox(ctx, state, "Abacadaba");
 
-    element(ctx, "div").attr("class", "button-list").children([&](auto ctx) {
-        do_button(ctx, "Store!", lambda_action([&] {
-                      emscripten::val::global("localStorage")
-                          .call<void>(
-                              "setItem",
-                              emscripten::val("my_key"),
-                              emscripten::val(read_signal(storage_value)));
-                  }));
-        do_button(ctx, "Retrieve!", lambda_action([&] {
-                      write_signal(
-                          storage_value,
-                          emscripten::val::global("localStorage")
-                              .call<std::string>(
-                                  "getItem", emscripten::val("my_key")));
-                  }));
+        element(ctx, "div")
+            .attr("class", "input-group")
+            .children([&](auto ctx) {
+                do_input(ctx, storage_value);
+
+                element(ctx, "div")
+                    .attr("class", "input-group-append")
+                    .children([&](auto ctx) {
+                        do_button(ctx, "Store!", lambda_action([&] {
+                                      emscripten::val::global("localStorage")
+                                          .call<void>(
+                                              "setItem",
+                                              emscripten::val("my_key"),
+                                              emscripten::val(
+                                                  read_signal(storage_value)));
+                                  }));
+                        do_button(
+                            ctx, "Retrieve!", lambda_action([&] {
+                                write_signal(
+                                    storage_value,
+                                    emscripten::val::global("localStorage")
+                                        .call<std::string>(
+                                            "getItem",
+                                            emscripten::val("my_key")));
+                            }));
+                    });
+            });
     });
 
     for (int i = 0; i != 10; ++i)
