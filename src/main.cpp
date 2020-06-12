@@ -149,46 +149,6 @@ do_nav_ui(dom::context ctx)
     do_link(ctx, "Just Testing", on_click);
 }
 
-struct cached_content_data
-{
-    component_container_ptr container;
-    tree_caching_data<element_object> caching;
-};
-
-template<class Context, class Function>
-void
-do_cached_content(Context ctx, id_interface const& id, Function&& fn)
-{
-    cached_content_data* data;
-    if (get_data(ctx, &data))
-        data->container.reset(new component_container);
-
-    scoped_component_container container(ctx, &data->container);
-
-    scoped_tree_cacher<element_object> cacher;
-
-    bool content_traversal_required;
-    if (is_refresh_event(ctx))
-    {
-        cacher.begin(
-            get<tree_traversal_tag>(ctx),
-            data->caching,
-            id,
-            container.is_dirty());
-        content_traversal_required = cacher.content_traversal_required();
-    }
-    else
-    {
-        content_traversal_required = container.is_on_route();
-    }
-
-    ALIA_EVENT_DEPENDENT_IF(content_traversal_required)
-    {
-        fn(ctx);
-    }
-    ALIA_END
-}
-
 void
 do_content_ui(dom::context ctx)
 {
