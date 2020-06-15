@@ -79,13 +79,14 @@ struct element_object
     {
         assert(this->js_id != 0);
         EM_ASM_({ Module.removeChild($0); }, this->js_id);
+        this->js_id = 0;
     }
 
     ~element_object()
     {
         if (this->js_id != 0)
         {
-            EM_ASM_({ Module.releaseNode($0); }, this->js_id);
+            this->remove();
         }
     }
 
