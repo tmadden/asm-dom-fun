@@ -79,6 +79,8 @@ struct element_object
     {
         assert(this->js_id != 0);
         EM_ASM_({ Module.removeChild($0); }, this->js_id);
+        // In asm-dom, removing a child from its parent also destroys it, so we
+        // have to mark it as uninitialized here.
         this->js_id = 0;
     }
 
