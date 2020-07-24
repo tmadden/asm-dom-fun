@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// alia.hpp - (local) - generated 2020-06-12T16:16:41-04:00
+// alia.hpp - (local) - generated 2020-07-24T16:00:10-04:00
 
 #ifndef ALIA_CORE_HPP
 #define ALIA_CORE_HPP
@@ -28,6 +28,7 @@
 #include <cassert>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <ostream>
@@ -105,6 +106,15 @@ struct make_void
 template<typename... Ts>
 using void_t = typename make_void<Ts...>::type;
 
+// implementation of C++17's is_invocable for C++14
+template<class F, class... Args>
+struct is_invocable
+    : std::is_constructible<
+          std::function<void(Args...)>,
+          std::reference_wrapper<typename std::remove_reference<F>::type>>
+{
+};
+
 // ALIA_LAMBDIFY(f) produces a lambda that calls f, which is essentially a
 // version of f that can be passed as an argument and still allows normal
 // overload resolution.
@@ -146,7 +156,6 @@ class function_view<Return(Args...)> final
 } // namespace alia
 
 
-#include <functional>
 #include <sstream>
 
 // This file implements the concept of IDs in alia.
@@ -221,9 +230,9 @@ struct id_interface_pointer_less_than_test
 // (if any) and create a new clone to store there.
 void
 clone_into(id_interface*& storage, id_interface const* id);
-// Same, but where the storage is a shared_ptr.
+// Same, but where the storage is a unique_ptr.
 void
-clone_into(std::shared_ptr<id_interface>& storage, id_interface const* id);
+clone_into(std::unique_ptr<id_interface>& storage, id_interface const* id);
 
 // captured_id is used to capture an ID for long-term storage (beyond the point
 // where the id_interface reference will be valid).
@@ -241,7 +250,7 @@ struct captured_id
         if (other.is_initialized())
             this->capture(other.get());
     }
-    captured_id(captured_id&& other)
+    captured_id(captured_id&& other) noexcept
     {
         id_ = std::move(other.id_);
     }
@@ -255,7 +264,7 @@ struct captured_id
         return *this;
     }
     captured_id&
-    operator=(captured_id&& other)
+    operator=(captured_id&& other) noexcept
     {
         id_ = std::move(other.id_);
         return *this;
@@ -286,13 +295,13 @@ struct captured_id
         return id_ && *id_ == id;
     }
     friend void
-    swap(captured_id& a, captured_id& b)
+    swap(captured_id& a, captured_id& b) noexcept
     {
         swap(a.id_, b.id_);
     }
 
  private:
-    std::shared_ptr<id_interface> id_;
+    std::unique_ptr<id_interface> id_;
 };
 bool
 operator==(captured_id const& a, captured_id const& b);
@@ -366,7 +375,6 @@ ref(id_interface const& id)
 template<class Value>
 struct simple_id : id_interface
 {
- public:
     simple_id()
     {
     }
@@ -407,7 +415,6 @@ struct simple_id : id_interface
         *static_cast<simple_id*>(copy) = *this;
     }
 
- private:
     Value value_;
 };
 
@@ -493,7 +500,7 @@ struct id_pair : id_interface
     {
     }
 
-    id_pair(Id0 const& id0, Id1 const& id1) : id0_(id0), id1_(id1)
+    id_pair(Id0 id0, Id1 id1) : id0_(std::move(id0)), id1_(std::move(id1))
     {
     }
 
@@ -536,23 +543,24 @@ struct id_pair : id_interface
 // combine_ids(id0, id1) combines id0 and id1 into a single ID pair.
 template<class Id0, class Id1>
 auto
-combine_ids(Id0 const& id0, Id1 const& id1)
+combine_ids(Id0 id0, Id1 id1)
 {
-    return id_pair<Id0, Id1>(id0, id1);
+    return id_pair<Id0, Id1>(std::move(id0), std::move(id1));
 }
 
 // Combine more than two IDs into nested pairs.
 template<class Id0, class Id1, class... Rest>
 auto
-combine_ids(Id0 const& id0, Id1 const& id1, Rest const&... rest)
+combine_ids(Id0 id0, Id1 id1, Rest... rest)
 {
-    return combine_ids(combine_ids(id0, id1), rest...);
+    return combine_ids(
+        combine_ids(std::move(id0), std::move(id1)), std::move(rest)...);
 }
 
 // Allow combine_ids() to take a single argument for variadic purposes.
 template<class Id0>
 auto
-combine_ids(Id0 const& id0)
+combine_ids(Id0 id0)
 {
     return id0;
 }
@@ -1366,91 +1374,142 @@ namespace alia {
 // They're typically created directly at the call site as function arguments
 // and are only valid for the life of the function call.
 // Signals wrappers are templated and store copies of the actual wrapped
-// accessor, which allows them to be easily composed at the call site,
+// signal, which allows them to be easily composed at the call site,
 // without requiring any memory allocation.
 
-// direction tags
-struct read_only_signal
+// The following enumerate the possible levels of capabilities that signals can
+// have with respect to reading values (from the signal). These are cumulative,
+// so each level includes all the capabilities before it.
+
+// The signal has no reading capabilities.
+struct signal_unreadable
 {
+    static constexpr unsigned level = 0;
 };
-struct write_only_signal
+// The signal can return a const reference to its value.
+struct signal_readable
 {
+    static constexpr unsigned level = 1;
 };
-struct duplex_signal
+// The signal is capable of copying its value.
+// It could also move but there may be side effects, so it requires explicit
+// activation.
+struct signal_copyable
 {
+    static constexpr unsigned level = 2;
+};
+// The signal is ready to move its value.
+struct signal_movable
+{
+    static constexpr unsigned level = 3;
 };
 
-// signal_direction_is_compatible<Expected,Actual>::value yields a compile-time
-// boolean indicating whether or not a signal with :Actual direction can be used
-// in a context expecting :Expected direction.
-// In the general case, the signals are not compatible.
+// The following are the same, but for writing. (Writing is essentially a
+// boolean property so it only has two levels.)
+struct signal_unwritable
+{
+    static constexpr unsigned level = 0;
+};
+struct signal_writable
+{
+    static constexpr unsigned level = 1;
+};
+
+// combined capabilities tags
+template<class Reading, class Writing>
+struct signal_capabilities
+{
+    typedef Reading reading;
+    typedef Writing writing;
+};
+
+// useful signal capabilities combinations
+typedef signal_capabilities<signal_readable, signal_unwritable>
+    read_only_signal;
+typedef signal_capabilities<signal_copyable, signal_unwritable>
+    copyable_read_only_signal;
+typedef signal_capabilities<signal_movable, signal_unwritable>
+    movable_read_only_signal;
+typedef signal_capabilities<signal_unreadable, signal_writable>
+    write_only_signal;
+typedef signal_capabilities<signal_readable, signal_writable>
+    readable_duplex_signal;
+typedef signal_capabilities<signal_copyable, signal_writable>
+    copyable_duplex_signal;
+typedef signal_capabilities<signal_movable, signal_writable>
+    movable_duplex_signal;
+typedef readable_duplex_signal duplex_signal;
+
+// signal_rw_capability_is_compatible<Expected,Actual>::value yields a
+// compile-time boolean indicating whether or not a signal with :Actual
+// reading/writing capabilities can be used in a context expecting :Expected
+// capabilities.
 template<class Expected, class Actual>
-struct signal_direction_is_compatible : std::false_type
+struct signal_rw_capability_is_compatible
 {
+    static constexpr bool value = Expected::level <= Actual::level;
 };
-// If the directions are the same, this is trivially true.
-template<class Same>
-struct signal_direction_is_compatible<Same, Same> : std::true_type
-{
-};
-// A duplex signal can work as anything.
-template<class Expected>
-struct signal_direction_is_compatible<Expected, duplex_signal> : std::true_type
-{
-};
-// Resolve ambiguity.
-template<>
-struct signal_direction_is_compatible<duplex_signal, duplex_signal>
-    : std::true_type
+
+// signal_capabilities_compatible<Expected,Actual>::value yields a compile-time
+// boolean indicating whether or not a signal with :Actual capabilities can be
+// used in a context expecting :Expected capabilities.
+template<class Expected, class Actual>
+struct signal_capabilities_compatible
+    : std::conditional_t<
+          signal_rw_capability_is_compatible<
+              typename Expected::reading,
+              typename Actual::reading>::value,
+          signal_rw_capability_is_compatible<
+              typename Expected::writing,
+              typename Actual::writing>,
+          std::false_type>
 {
 };
 
-// signal_direction_intersection<A,B>::type, where A and B are signal
-// directions, yields a direction that only has the capabilities that are common
+// signal_rw_capability_intersection<A,B>::type yields the type representing the
+// intersection of the read/write capabilities :A and :B.
+template<class A, class B>
+struct signal_rw_capability_intersection
+    : std::conditional<A::level <= B::level, A, B>
+{
+};
+
+// signal_capabilities_intersection<A,B>::type, where A and B are signal
+// capability tags, yields a tag that only has the capabilities that are common
 // to both A and B.
 template<class A, class B>
-struct signal_direction_intersection
+struct signal_capabilities_intersection
 {
-};
-// If the directions are the same, this is trivial.
-template<class Same>
-struct signal_direction_intersection<Same, Same>
-{
-    typedef Same type;
-};
-// A duplex signal has both capabilities.
-template<class A>
-struct signal_direction_intersection<A, duplex_signal>
-{
-    typedef A type;
-};
-template<class B>
-struct signal_direction_intersection<duplex_signal, B>
-{
-    typedef B type;
-};
-// Resolve ambiguity.
-template<>
-struct signal_direction_intersection<duplex_signal, duplex_signal>
-{
-    typedef duplex_signal type;
+    typedef signal_capabilities<
+        typename signal_rw_capability_intersection<
+            typename A::reading,
+            typename B::reading>::type,
+        typename signal_rw_capability_intersection<
+            typename A::writing,
+            typename B::writing>::type>
+        type;
 };
 
-// signal_direction_union<A,B>::type, where A and B are signal directions,
-// yields a direction that has the union of the capabilities of A and B.
+// signal_rw_capability_union<A,B>::type yields the type representing the
+// union of the read/write capabilities :A and :B.
 template<class A, class B>
-struct signal_direction_union;
-// If the directions are the same, this is trivial.
-template<class Same>
-struct signal_direction_union<Same, Same>
+struct signal_rw_capability_union : std::conditional<A::level <= B::level, B, A>
 {
-    typedef Same type;
 };
+
+// signal_capabilities_union<A,B>::type, where A and B are signal capability
+// tags, yields a tag that has the union of the capabilities of A and B.
 template<class A, class B>
-struct signal_direction_union
+struct signal_capabilities_union
 {
-    // All other combinations yield duplex signals.
-    typedef duplex_signal type;
+    typedef signal_capabilities<
+        typename signal_rw_capability_union<
+            typename A::reading,
+            typename B::reading>::type,
+        typename signal_rw_capability_union<
+            typename A::writing,
+            typename B::writing>::type>
+        type;
 };
 
 // untyped_signal_base defines functionality common to all signals, irrespective
@@ -1476,6 +1535,27 @@ struct untyped_signal_base
     // Is the signal currently ready to write?
     virtual bool
     ready_to_write() const = 0;
+
+    // WARNING: EXPERIMENTAL VALIDATION STUFF FOLLOWS...
+
+    // Handle a validation error.
+    //
+    // This is called when there's an attempt to write to the signal and a
+    // validation_error is thrown. (The argument is the error.)
+    //
+    // The return value should be true iff the validation error was handled.
+    //
+    virtual bool invalidate(std::exception_ptr) const
+    {
+        return false;
+    }
+
+    // Is this signal currently invalidated?
+    virtual bool
+    is_invalidated() const
+    {
+        return false;
+    }
 };
 
 template<class Value>
@@ -1488,93 +1568,141 @@ struct signal_interface : untyped_signal_base
     virtual Value const&
     read() const = 0;
 
+    // Move out the signal's value.
+    // This is expected to be implemented by copyable and movable signals.
+    virtual Value
+    movable_value() const = 0;
+
     // Write the signal's value.
     virtual void
-    write(Value const& value) const = 0;
+    write(Value value) const = 0;
 };
 
-template<class Derived, class Value, class Direction>
+template<class Derived, class Value, class Capabilities>
 struct signal_base : signal_interface<Value>
 {
-    typedef Direction direction_tag;
+    typedef Capabilities capabilities;
 
     template<class Index>
-    auto operator[](Index index) const;
+    auto
+    operator[](Index index) const;
 };
 
-template<class Derived, class Value, class Direction>
-struct signal : signal_base<Derived, Value, Direction>
+template<class Derived, class Value, class Capabilities>
+struct signal : signal_base<Derived, Value, Capabilities>
 {
 };
+
+// The following implement the various unused functions that are required by the
+// signal_interface but won't be used because of the capabilities of the
+// signal...
+
+// LCOV_EXCL_START
+
+#define ALIA_DEFINE_UNUSED_SIGNAL_WRITE_INTERFACE(Value)                       \
+    bool ready_to_write() const override                                       \
+    {                                                                          \
+        return false;                                                          \
+    }                                                                          \
+    void write(Value) const override                                           \
+    {                                                                          \
+    }
+
+#define ALIA_DEFINE_UNUSED_SIGNAL_MOVE_INTERFACE(Value)                        \
+    Value movable_value() const override                                       \
+    {                                                                          \
+        throw nullptr;                                                         \
+    }
+
+#define ALIA_DEFINE_UNUSED_SIGNAL_READ_INTERFACE(Value)                        \
+    ALIA_DEFINE_UNUSED_SIGNAL_MOVE_INTERFACE(Value)                            \
+    id_interface const& value_id() const override                              \
+    {                                                                          \
+        return null_id;                                                        \
+    }                                                                          \
+    bool has_value() const override                                            \
+    {                                                                          \
+        return false;                                                          \
+    }                                                                          \
+    Value const& read() const override                                         \
+    {                                                                          \
+        throw nullptr;                                                         \
+    }
 
 template<class Derived, class Value>
 struct signal<Derived, Value, read_only_signal>
     : signal_base<Derived, Value, read_only_signal>
 {
-    // These must be defined to satisfy the interface requirements, but they
-    // obviously won't be used on a read-only signal.
-    // LCOV_EXCL_START
-    bool
-    ready_to_write() const
-    {
-        return false;
-    }
-    void
-    write(Value const&) const
-    {
-    }
-    // LCOV_EXCL_STOP
+    ALIA_DEFINE_UNUSED_SIGNAL_WRITE_INTERFACE(Value)
+    ALIA_DEFINE_UNUSED_SIGNAL_MOVE_INTERFACE(Value)
+};
+
+template<class Derived, class Value>
+struct signal<
+    Derived,
+    Value,
+    signal_capabilities<signal_movable, signal_unwritable>>
+    : signal_base<
+          Derived,
+          Value,
+          signal_capabilities<signal_movable, signal_unwritable>>
+{
+    ALIA_DEFINE_UNUSED_SIGNAL_WRITE_INTERFACE(Value)
+};
+
+template<class Derived, class Value>
+struct signal<
+    Derived,
+    Value,
+    signal_capabilities<signal_copyable, signal_unwritable>>
+    : signal_base<
+          Derived,
+          Value,
+          signal_capabilities<signal_copyable, signal_unwritable>>
+{
+    ALIA_DEFINE_UNUSED_SIGNAL_WRITE_INTERFACE(Value)
 };
 
 template<class Derived, class Value>
 struct signal<Derived, Value, write_only_signal>
     : signal_base<Derived, Value, write_only_signal>
 {
-    // These must be defined to satisfy the interface requirements, but they
-    // obviously won't be used on a write-only signal.
-    // LCOV_EXCL_START
-    id_interface const&
-    value_id() const
-    {
-        return null_id;
-    }
-    bool
-    has_value() const
-    {
-        return false;
-    }
-    Value const&
-    read() const
-    {
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wnull-dereference"
-#endif
-        return *(Value const*) nullptr;
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
-    }
-    // LCOV_EXCL_STOP
+    ALIA_DEFINE_UNUSED_SIGNAL_READ_INTERFACE(Value)
 };
 
-// signal_ref is a reference to a signal that acts as a signal itself.
-template<class Value, class Direction>
-struct signal_ref : signal<signal_ref<Value, Direction>, Value, Direction>
+template<class Derived, class Value>
+struct signal<
+    Derived,
+    Value,
+    signal_capabilities<signal_readable, signal_writable>>
+    : signal_base<
+          Derived,
+          Value,
+          signal_capabilities<signal_readable, signal_writable>>
 {
-    // Construct from any signal with compatible direction.
-    template<class OtherSignal, class OtherDirection>
+    ALIA_DEFINE_UNUSED_SIGNAL_MOVE_INTERFACE(Value)
+};
+
+// LCOV_EXCL_STOP
+
+// signal_ref is a reference to a signal that acts as a signal itself.
+template<class Value, class Capabilities>
+struct signal_ref : signal<signal_ref<Value, Capabilities>, Value, Capabilities>
+{
+    // Construct from any signal with compatible capabilities.
+    template<class OtherSignal, class OtherCapabilities>
     signal_ref(
-        signal<OtherSignal, Value, OtherDirection> const& signal,
+        signal<OtherSignal, Value, OtherCapabilities> const& signal,
         std::enable_if_t<
-            signal_direction_is_compatible<Direction, OtherDirection>::value,
+            signal_capabilities_compatible<Capabilities, OtherCapabilities>::
+                value,
             int> = 0)
         : ref_(&signal)
     {
     }
     // Construct from another signal_ref. - This is meant to prevent unnecessary
     // layers of indirection.
-    signal_ref(signal_ref<Value, Direction> const& other) : ref_(other.ref_)
+    signal_ref(signal_ref<Value, Capabilities> const& other) : ref_(other.ref_)
     {
     }
 
@@ -1590,6 +1718,11 @@ struct signal_ref : signal<signal_ref<Value, Direction>, Value, Direction>
     {
         return ref_->read();
     }
+    Value
+    movable_value() const
+    {
+        return ref_->movable_value();
+    }
     id_interface const&
     value_id() const
     {
@@ -1601,9 +1734,19 @@ struct signal_ref : signal<signal_ref<Value, Direction>, Value, Direction>
         return ref_->ready_to_write();
     }
     void
-    write(Value const& value) const
+    write(Value value) const
     {
-        ref_->write(value);
+        ref_->write(std::move(value));
+    }
+    bool
+    invalidate(std::exception_ptr error) const
+    {
+        return ref_->invalidate(error);
+    }
+    bool
+    is_invalidated() const
+    {
+        return ref_->is_invalidated();
     }
 
  private:
@@ -1623,7 +1766,7 @@ using writable = signal_ref<Value, write_only_signal>;
 // duplex<Value> denotes a reference to a duplex signal carrying values of type
 // :Value.
 template<class Value>
-using duplex = signal_ref<Value, duplex_signal>;
+using duplex = signal_ref<Value, readable_duplex_signal>;
 
 // is_signal_type<T>::value yields a compile-time boolean indicating whether or
 // not T is an alia signal type.
@@ -1635,9 +1778,9 @@ struct is_signal_type : std::is_base_of<untyped_signal_base, T>
 // signal_is_readable<Signal>::value yields a compile-time boolean indicating
 // whether or not the given signal type supports reading.
 template<class Signal>
-struct signal_is_readable : signal_direction_is_compatible<
+struct signal_is_readable : signal_capabilities_compatible<
                                 read_only_signal,
-                                typename Signal::direction_tag>
+                                typename Signal::capabilities>
 {
 };
 
@@ -1675,12 +1818,24 @@ read_signal(Signal const& signal)
     return signal.read();
 }
 
+// When a value is written to a signal, the signal is allowed to throw a
+// validation_error if the value isn't acceptable.
+struct validation_error : exception
+{
+    validation_error(std::string const& message) : exception(message)
+    {
+    }
+    ~validation_error() noexcept(true)
+    {
+    }
+};
+
 // signal_is_writable<Signal>::value yields a compile-time boolean indicating
 // whether or not the given signal type supports writing.
 template<class Signal>
-struct signal_is_writable : signal_direction_is_compatible<
+struct signal_is_writable : signal_capabilities_compatible<
                                 write_only_signal,
-                                typename Signal::direction_tag>
+                                typename Signal::capabilities>
 {
 };
 
@@ -1710,18 +1865,32 @@ signal_ready_to_write(Signal const& signal)
 // Note that if the signal isn't ready to write, this is a no op.
 template<class Signal, class Value>
 std::enable_if_t<signal_is_writable<Signal>::value>
-write_signal(Signal const& signal, Value const& value)
+write_signal(Signal const& signal, Value value)
 {
     if (signal.ready_to_write())
-        signal.write(value);
+    {
+        try
+        {
+            signal.write(std::move(value));
+        }
+        catch (validation_error&)
+        {
+            // EXPERIMENTAL VALIDATION LOGIC: Try to let the signal handle the
+            // validation error (at some level). If it can't, rethrow the
+            // exception.
+            auto e = std::current_exception();
+            if (!signal.invalidate(e))
+                std::rethrow_exception(e);
+        }
+    }
 }
 
 // signal_is_duplex<Signal>::value yields a compile-time boolean indicating
 // whether or not the given signal type supports both reading and writing.
 template<class Signal>
-struct signal_is_duplex : signal_direction_is_compatible<
-                              duplex_signal,
-                              typename Signal::direction_tag>
+struct signal_is_duplex : signal_capabilities_compatible<
+                              readable_duplex_signal,
+                              typename Signal::capabilities>
 {
 };
 
@@ -1735,17 +1904,72 @@ struct is_duplex_signal_type : std::conditional_t<
 {
 };
 
-// When a value is written to a signal, the signal is allowed to throw a
-// validation_error if the value isn't acceptable.
-struct validation_error : exception
+// signal_is_copyable<Signal>::value yields a compile-time boolean indicating
+// whether or not the given signal type supports copying.
+template<class Signal>
+struct signal_is_copyable : signal_rw_capability_is_compatible<
+                                signal_copyable,
+                                typename Signal::capabilities::reading>
 {
-    validation_error(std::string const& message) : exception(message)
-    {
-    }
-    ~validation_error() noexcept(true)
-    {
-    }
 };
+
+// is_copyable_signal_type<T>::value yields a compile-time boolean indicating
+// whether or not T is an alia signal that supports value copying.
+template<class T>
+struct is_copyable_signal_type : std::conditional_t<
+                                     is_signal_type<T>::value,
+                                     signal_is_copyable<T>,
+                                     std::false_type>
+{
+};
+
+// signal_is_movable<Signal>::value yields a compile-time boolean indicating
+// whether or not the given signal type allows moving.
+template<class Signal>
+struct signal_is_movable : signal_rw_capability_is_compatible<
+                               signal_movable,
+                               typename Signal::capabilities::reading>
+{
+};
+
+// is_movable_signal_type<T>::value yields a compile-time boolean indicating
+// whether or not T is an alia signal that supports value movement.
+template<class T>
+struct is_movable_signal_type : std::conditional_t<
+                                    is_signal_type<T>::value,
+                                    signal_is_movable<T>,
+                                    std::false_type>
+{
+};
+
+// Move out a signal's value.
+template<class Signal>
+std::enable_if_t<signal_is_movable<Signal>::value, typename Signal::value_type>
+move_signal(Signal const& signal)
+{
+    assert(signal.has_value());
+    return signal.movable_value();
+}
+
+// Forward along a signal's value.
+// This will move out the value if movement is activated or return a reference
+// otherwise.
+template<class Signal>
+std::enable_if_t<signal_is_movable<Signal>::value, typename Signal::value_type>
+forward_signal(Signal const& signal)
+{
+    assert(signal.has_value());
+    return signal.movable_value();
+}
+template<class Signal>
+std::enable_if_t<
+    !signal_is_movable<Signal>::value && signal_is_readable<Signal>::value,
+    typename Signal::value_type const&>
+forward_signal(Signal const& signal)
+{
+    assert(signal.has_value());
+    return signal.read();
+}
 
 } // namespace alia
 
@@ -1758,8 +1982,8 @@ namespace alia {
 
 // regular_signal is a partial implementation of the signal interface for
 // cases where the value ID of the signal is simply the value itself.
-template<class Derived, class Value, class Direction>
-struct regular_signal : signal<Derived, Value, Direction>
+template<class Derived, class Value, class Capabilities>
+struct regular_signal : signal<Derived, Value, Capabilities>
 {
     id_interface const&
     value_id() const
@@ -1774,32 +1998,6 @@ struct regular_signal : signal<Derived, Value, Direction>
 
  private:
     mutable simple_id_by_reference<Value> id_;
-};
-
-// lazy_reader is used to create signals that lazily generate their values.
-// It provides storage for the computed value and ensures that it's only
-// computed once.
-template<class Value>
-struct lazy_reader
-{
-    lazy_reader() : already_generated_(false)
-    {
-    }
-    template<class Generator>
-    Value const&
-    read(Generator const& generator) const
-    {
-        if (!already_generated_)
-        {
-            value_ = generator();
-            already_generated_ = true;
-        }
-        return value_;
-    }
-
- private:
-    mutable bool already_generated_;
-    mutable Value value_;
 };
 
 // signals_all_have_values(signal_a, signal_b, ...) is a variadic function that
@@ -1832,21 +2030,21 @@ struct type_prefers_simple_id : std::is_fundamental<Value>
 template<
     class Derived,
     class Value,
-    class Direction,
+    class Capabilities,
     class ComplexId,
     class = void>
 struct preferred_id_signal
 {
 };
 
-template<class Derived, class Value, class Direction, class ComplexId>
+template<class Derived, class Value, class Capabilities, class ComplexId>
 struct preferred_id_signal<
     Derived,
     Value,
-    Direction,
+    Capabilities,
     ComplexId,
     std::enable_if_t<type_prefers_simple_id<Value>::value>>
-    : signal<Derived, Value, Direction>
+    : signal<Derived, Value, Capabilities>
 {
     id_interface const&
     value_id() const
@@ -1863,14 +2061,14 @@ struct preferred_id_signal<
     mutable simple_id_by_reference<Value> id_;
 };
 
-template<class Derived, class Value, class Direction, class ComplexId>
+template<class Derived, class Value, class Capabilities, class ComplexId>
 struct preferred_id_signal<
     Derived,
     Value,
-    Direction,
+    Capabilities,
     ComplexId,
     std::enable_if_t<!type_prefers_simple_id<Value>::value>>
-    : signal<Derived, Value, Direction>
+    : signal<Derived, Value, Capabilities>
 {
     id_interface const&
     value_id() const
@@ -1911,6 +2109,151 @@ refresh_signal_shadow(
     }
 }
 
+// signal_wrapper is a utility for wrapping another signal. It's designed to be
+// used as a base class. By default, it passes every signal function through to
+// the wrapped signal (a protected member named wrapped_). You customize your
+// wrapper by overriding what's different.
+template<
+    class Derived,
+    class Wrapped,
+    class Value = typename Wrapped::value_type,
+    class Capabilities = typename Wrapped::capabilities>
+struct signal_wrapper : signal<Derived, Value, Capabilities>
+{
+    signal_wrapper(Wrapped wrapped) : wrapped_(std::move(wrapped))
+    {
+    }
+    bool
+    has_value() const
+    {
+        return wrapped_.has_value();
+    }
+    typename Wrapped::value_type const&
+    read() const
+    {
+        return wrapped_.read();
+    }
+    typename Wrapped::value_type
+    movable_value() const
+    {
+        return wrapped_.movable_value();
+    }
+    id_interface const&
+    value_id() const
+    {
+        return wrapped_.value_id();
+    }
+    bool
+    ready_to_write() const
+    {
+        return wrapped_.ready_to_write();
+    }
+    void
+    write(typename Wrapped::value_type value) const
+    {
+        return wrapped_.write(std::move(value));
+    }
+    bool
+    invalidate(std::exception_ptr error) const
+    {
+        return wrapped_.invalidate(error);
+    }
+    bool
+    is_invalidated() const
+    {
+        return wrapped_.is_invalidated();
+    }
+
+ protected:
+    Wrapped wrapped_;
+};
+
+// casting_signal_wrapper is similar to signal_wrapper but it doesn't try to
+// implement any functions that depend on the value type of the signal. It's
+// intended for wrappers that plan to cast the wrapped signal value to a
+// different type. Using signal_wrapper in those cases would result in errors in
+// the default implementations of read(), write(), etc.
+template<
+    class Derived,
+    class Wrapped,
+    class Value,
+    class Capabilities = typename Wrapped::capabilities>
+struct casting_signal_wrapper : signal<Derived, Value, Capabilities>
+{
+    casting_signal_wrapper(Wrapped wrapped) : wrapped_(std::move(wrapped))
+    {
+    }
+    bool
+    has_value() const
+    {
+        return wrapped_.has_value();
+    }
+    id_interface const&
+    value_id() const
+    {
+        return wrapped_.value_id();
+    }
+    bool
+    ready_to_write() const
+    {
+        return wrapped_.ready_to_write();
+    }
+    bool
+    invalidate(std::exception_ptr error) const
+    {
+        return wrapped_.invalidate(error);
+    }
+    bool
+    is_invalidated() const
+    {
+        return wrapped_.is_invalidated();
+    }
+
+ protected:
+    Wrapped wrapped_;
+};
+
+// lazy_signal is used to create signals that lazily generate their values.
+// It provides storage for the computed value and automatically implements
+// read() in terms of movable_value().
+template<class Derived, class Value, class Capabilities>
+struct lazy_signal : signal<Derived, Value, Capabilities>
+{
+    Value const&
+    read() const override
+    {
+        value_ = static_cast<Derived const&>(*this).movable_value();
+        return value_;
+    }
+
+ private:
+    mutable Value value_;
+};
+
+// lazy_signal_wrapper is the combination of signal_wrapper and lazy_signal.
+template<
+    class Derived,
+    class Wrapped,
+    class Value = typename Wrapped::value_type,
+    class Capabilities = typename Wrapped::capabilities>
+struct lazy_signal_wrapper
+    : signal_wrapper<Derived, Wrapped, Value, Capabilities>
+{
+    lazy_signal_wrapper(Wrapped wrapped)
+        : lazy_signal_wrapper::signal_wrapper(std::move(wrapped))
+    {
+    }
+    Value const&
+    read() const override
+    {
+        value_ = static_cast<Derived const&>(*this).movable_value();
+        return value_;
+    }
+
+ private:
+    mutable Value value_;
+};
+
 } // namespace alia
 
 
@@ -1920,7 +2263,7 @@ namespace alia {
 
 // empty<Value>() gives a signal that never has a value.
 template<class Value>
-struct empty_signal : signal<empty_signal<Value>, Value, duplex_signal>
+struct empty_signal : signal<empty_signal<Value>, Value, readable_duplex_signal>
 {
     empty_signal()
     {
@@ -1937,18 +2280,23 @@ struct empty_signal : signal<empty_signal<Value>, Value, duplex_signal>
     }
     // Since this never has a value, read() should never be called.
     // LCOV_EXCL_START
-    Value const&
-    read() const
-    {
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wnull-dereference"
 #endif
-        return *(Value const*) nullptr;
+    Value const&
+    read() const
+    {
+        throw nullptr;
+    }
+    Value
+    movable_value() const
+    {
+        throw nullptr;
+    }
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
-    }
     // LCOV_EXCL_STOP
     bool
     ready_to_write() const
@@ -1957,8 +2305,7 @@ struct empty_signal : signal<empty_signal<Value>, Value, duplex_signal>
     }
     // Since this is never ready to write, write() should never be called.
     // LCOV_EXCL_START
-    void
-    write(Value const&) const
+    void write(Value) const
     {
     }
     // LCOV_EXCL_STOP
@@ -1973,9 +2320,9 @@ empty()
 // value(v) creates a read-only signal that carries the value v.
 template<class Value>
 struct value_signal
-    : regular_signal<value_signal<Value>, Value, read_only_signal>
+    : regular_signal<value_signal<Value>, Value, movable_read_only_signal>
 {
-    explicit value_signal(Value const& v) : v_(v)
+    explicit value_signal(Value v) : v_(std::move(v))
     {
     }
     bool
@@ -1988,20 +2335,26 @@ struct value_signal
     {
         return v_;
     }
+    Value
+    movable_value() const
+    {
+        Value movable = std::move(v_);
+        return movable;
+    }
 
  private:
-    Value v_;
+    mutable Value v_;
 };
 template<class Value>
 value_signal<Value>
-value(Value const& v)
+value(Value v)
 {
-    return value_signal<Value>(v);
+    return value_signal<Value>(std::move(v));
 }
 
 // This is a special overload of value() for C-style string literals.
 struct string_literal_signal
-    : signal<string_literal_signal, std::string, read_only_signal>
+    : lazy_signal<string_literal_signal, std::string, read_only_signal>
 {
     string_literal_signal(char const* x) : text_(x)
     {
@@ -2017,15 +2370,14 @@ struct string_literal_signal
     {
         return true;
     }
-    std::string const&
-    read() const
+    std::string
+    movable_value() const
     {
-        return lazy_reader_.read([&] { return std::string(text_); });
+        return std::string(text_);
     }
 
  private:
     char const* text_;
-    lazy_reader<std::string> lazy_reader_;
     mutable simple_id<char const*> id_;
 };
 inline string_literal_signal
@@ -2046,7 +2398,7 @@ inline string_literal_signal operator"" _a(char const* s, size_t)
 // directly exposes the value of x.
 template<class Value>
 struct direct_signal
-    : regular_signal<direct_signal<Value>, Value, duplex_signal>
+    : regular_signal<direct_signal<Value>, Value, copyable_duplex_signal>
 {
     explicit direct_signal(Value* v) : v_(v)
     {
@@ -2061,15 +2413,21 @@ struct direct_signal
     {
         return *v_;
     }
+    Value
+    movable_value() const
+    {
+        Value movable = std::move(*v_);
+        return movable;
+    }
     bool
     ready_to_write() const
     {
         return true;
     }
     void
-    write(Value const& value) const
+    write(Value value) const
     {
-        *v_ = value;
+        *v_ = std::move(value);
     }
 
  private:
@@ -2145,6 +2503,9 @@ struct context_storage
     impl::generic_tagged_storage<impl::any_ref> generic;
 
     ALIA_IMPLEMENT_STORAGE_OBJECT_ACCESSORS(context_storage)
+
+    // an ID to track changes in the context contents
+    id_interface const* content_id = nullptr;
 };
 
 ALIA_ADD_DIRECT_TAGGED_DATA_ACCESS(context_storage, system_tag, sys)
@@ -2306,6 +2667,14 @@ get_data_traversal(Context ctx)
     return ctx.template get<data_traversal_tag>();
 }
 
+inline id_interface const&
+get_content_id(context ctx)
+{
+    return *ctx.contents_.storage->content_id;
+}
+
+// optional_context is basically just std::optional for contexts.
+// (alia supports C++14, which is why we don't use std::optional directly.)
 template<class Context>
 struct optional_context
 {
@@ -2362,8 +2731,569 @@ struct optional_context
     Context ctx_;
 };
 
+// scoped_context_content_id is used to fold another ID into the overall ID for
+// a context's content.
+struct scoped_context_content_id
+{
+    scoped_context_content_id()
+    {
+    }
+    scoped_context_content_id(context ctx, id_interface const& id)
+    {
+        begin(ctx, id);
+    }
+    ~scoped_context_content_id()
+    {
+        end();
+    }
+
+    void
+    begin(context ctx, id_interface const& id);
+
+    void
+    end();
+
+ private:
+    optional_context<dataless_context> ctx_;
+    simple_id<unsigned> this_id_;
+    id_interface const* parent_id_;
+};
+
 } // namespace alia
 
+
+
+
+namespace alia {
+
+// signalize(x) turns x into a signal if it isn't already one.
+// Or, in other words...
+// signalize(s), where s is a signal, returns s.
+// signalize(v), where v is a raw value, returns a value signal carrying v.
+template<class Signal>
+std::enable_if_t<is_readable_signal_type<Signal>::value, Signal>
+signalize(Signal s)
+{
+    return s;
+}
+template<class Value, std::enable_if_t<!is_signal_type<Value>::value, int> = 0>
+auto
+signalize(Value v)
+{
+    return value(std::move(v));
+}
+
+// fake_readability(s), where :s is a signal, yields a wrapper for :s that
+// pretends to have read capabilities. It will never actually have a value, but
+// it will type-check as a readable signal.
+template<class Wrapped>
+struct readability_faker : signal_wrapper<
+                               readability_faker<Wrapped>,
+                               Wrapped,
+                               typename Wrapped::value_type,
+                               typename signal_capabilities_union<
+                                   read_only_signal,
+                                   typename Wrapped::capabilities>::type>
+{
+    readability_faker(Wrapped wrapped)
+        : readability_faker::signal_wrapper(std::move(wrapped))
+    {
+    }
+    id_interface const&
+    value_id() const
+    {
+        return null_id;
+    }
+    bool
+    has_value() const
+    {
+        return false;
+    }
+    // Since this is only faking readability, read() should never be called.
+    // LCOV_EXCL_START
+    typename Wrapped::value_type const&
+    read() const
+    {
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wnull-dereference"
+#endif
+        return *(typename Wrapped::value_type const*) nullptr;
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+    }
+    // LCOV_EXCL_STOP
+};
+template<class Wrapped>
+readability_faker<Wrapped>
+fake_readability(Wrapped wrapped)
+{
+    return readability_faker<Wrapped>(std::move(wrapped));
+}
+
+// fake_writability(s), where :s is a signal, yields a wrapper for :s that
+// pretends to have write capabilities. It will never actually be ready to
+// write, but it will type-check as a writable signal.
+template<class Wrapped>
+struct writability_faker : signal_wrapper<
+                               writability_faker<Wrapped>,
+                               Wrapped,
+                               typename Wrapped::value_type,
+                               typename signal_capabilities_union<
+                                   write_only_signal,
+                                   typename Wrapped::capabilities>::type>
+{
+    writability_faker(Wrapped wrapped)
+        : writability_faker::signal_wrapper(std::move(wrapped))
+    {
+    }
+    bool
+    ready_to_write() const
+    {
+        return false;
+    }
+    // Since this is only faking writability, write() should never be called.
+    // LCOV_EXCL_START
+    void write(typename Wrapped::value_type) const
+    {
+    }
+    // LCOV_EXCL_STOP
+};
+template<class Wrapped>
+writability_faker<Wrapped>
+fake_writability(Wrapped wrapped)
+{
+    return writability_faker<Wrapped>(std::move(wrapped));
+}
+
+// signal_cast<Value>(x), where :x is a signal, yields a proxy for :x with
+// the value type :Value. The proxy will apply static_casts to convert its
+// own values to and from :x's value type.
+template<class Wrapped, class To>
+struct casting_signal
+    : casting_signal_wrapper<casting_signal<Wrapped, To>, Wrapped, To>
+{
+    casting_signal(Wrapped wrapped)
+        : casting_signal::casting_signal_wrapper(std::move(wrapped))
+    {
+    }
+    To const&
+    read() const
+    {
+        value_ = this->movable_value();
+        return value_;
+    }
+    To
+    movable_value() const
+    {
+        return static_cast<To>(forward_signal(this->wrapped_));
+    }
+    void
+    write(To value) const
+    {
+        return this->wrapped_.write(
+            static_cast<typename Wrapped::value_type>(value));
+    }
+
+ private:
+    mutable To value_;
+};
+// signal_caster is just another level of indirection that allows us to
+// eliminate the casting_signal entirely if it's just going to cast to the same
+// type.
+template<class Wrapped, class To>
+struct signal_caster
+{
+    typedef casting_signal<Wrapped, To> type;
+    static type
+    apply(Wrapped wrapped)
+    {
+        return type(std::move(wrapped));
+    }
+};
+template<class Wrapped>
+struct signal_caster<Wrapped, typename Wrapped::value_type>
+{
+    typedef Wrapped type;
+    static type
+    apply(Wrapped wrapped)
+    {
+        return wrapped;
+    }
+};
+template<class To, class Wrapped>
+typename signal_caster<Wrapped, To>::type
+signal_cast(Wrapped wrapped)
+{
+    return signal_caster<Wrapped, To>::apply(std::move(wrapped));
+}
+
+// has_value(x) yields a signal to a boolean which indicates whether or not :x
+// has a value. (The returned signal itself always has a value.)
+template<class Wrapped>
+struct value_presence_signal
+    : regular_signal<value_presence_signal<Wrapped>, bool, read_only_signal>
+{
+    value_presence_signal(Wrapped wrapped) : wrapped_(std::move(wrapped))
+    {
+    }
+    bool
+    has_value() const
+    {
+        return true;
+    }
+    bool const&
+    read() const
+    {
+        value_ = wrapped_.has_value();
+        return value_;
+    }
+
+ private:
+    Wrapped wrapped_;
+    mutable bool value_;
+};
+template<class Wrapped>
+auto
+has_value(Wrapped wrapped)
+{
+    return value_presence_signal<Wrapped>(std::move(wrapped));
+}
+
+// ready_to_write(x) yields a signal to a boolean that indicates whether or not
+// :x is ready to write. (The returned signal always has a value.)
+template<class Wrapped>
+struct write_readiness_signal
+    : regular_signal<write_readiness_signal<Wrapped>, bool, read_only_signal>
+{
+    write_readiness_signal(Wrapped wrapped) : wrapped_(std::move(wrapped))
+    {
+    }
+    bool
+    has_value() const
+    {
+        return true;
+    }
+    bool const&
+    read() const
+    {
+        value_ = wrapped_.ready_to_write();
+        return value_;
+    }
+
+ private:
+    Wrapped wrapped_;
+    mutable bool value_;
+};
+template<class Wrapped>
+auto
+ready_to_write(Wrapped wrapped)
+{
+    return write_readiness_signal<Wrapped>(std::move(wrapped));
+}
+
+// add_fallback(primary, fallback), where :primary and :fallback are both
+// signals, yields another signal whose value is that of :primary if it has one
+// and that of :fallback otherwise.
+// All writes go directly to :primary.
+template<class Primary, class Fallback>
+struct fallback_signal
+    : signal_wrapper<fallback_signal<Primary, Fallback>, Primary>
+{
+    fallback_signal()
+    {
+    }
+    fallback_signal(Primary primary, Fallback fallback)
+        : fallback_signal::signal_wrapper(std::move(primary)),
+          fallback_(std::move(fallback))
+    {
+    }
+    bool
+    has_value() const
+    {
+        return this->wrapped_.has_value() || fallback_.has_value();
+    }
+    typename Primary::value_type const&
+    read() const
+    {
+        return this->wrapped_.has_value() ? this->wrapped_.read()
+                                          : fallback_.read();
+    }
+    id_interface const&
+    value_id() const
+    {
+        id_ = combine_ids(
+            make_id(this->wrapped_.has_value()),
+            this->wrapped_.has_value() ? ref(this->wrapped_.value_id())
+                                       : ref(fallback_.value_id()));
+        return id_;
+    }
+
+ private:
+    mutable id_pair<simple_id<bool>, id_ref> id_;
+    Fallback fallback_;
+};
+template<class Primary, class Fallback>
+fallback_signal<Primary, Fallback>
+make_fallback_signal(Primary primary, Fallback fallback)
+{
+    return fallback_signal<Primary, Fallback>(
+        std::move(primary), std::move(fallback));
+}
+template<class Primary, class Fallback>
+auto
+add_fallback(Primary primary, Fallback fallback)
+{
+    return make_fallback_signal(
+        signalize(std::move(primary)), signalize(std::move(fallback)));
+}
+
+// simplify_id(s), where :s is a signal, yields a wrapper for :s with the exact
+// same read/write behavior but whose value ID is a simple_id (i.e., it is
+// simply the value of the signal).
+//
+// The main utility of this is in cases where you have a signal carrying a
+// small value with a complicated value ID (because it was picked from the
+// signal of a larger data structure, for example). The more complicated ID
+// might change superfluously.
+//
+template<class Wrapped>
+struct simplified_id_wrapper
+    : signal_wrapper<simplified_id_wrapper<Wrapped>, Wrapped>
+{
+    simplified_id_wrapper(Wrapped wrapped)
+        : simplified_id_wrapper::signal_wrapper(std::move(wrapped))
+    {
+    }
+    id_interface const&
+    value_id() const
+    {
+        if (this->has_value())
+        {
+            id_ = make_id_by_reference(this->read());
+            return id_;
+        }
+        return null_id;
+    }
+
+ private:
+    mutable simple_id_by_reference<typename Wrapped::value_type> id_;
+};
+template<class Wrapped>
+simplified_id_wrapper<Wrapped>
+simplify_id(Wrapped wrapped)
+{
+    return simplified_id_wrapper<Wrapped>(std::move(wrapped));
+}
+
+// mask(signal, availibility_flag) does the equivalent of bit masking on
+// individual signals. If :availibility_flag evaluates to true, the mask
+// evaluates to a signal equivalent to :signal. Otherwise, it evaluates to an
+// empty signal of the same type.
+template<class Primary, class Mask>
+struct masking_signal : signal_wrapper<masking_signal<Primary, Mask>, Primary>
+{
+    masking_signal()
+    {
+    }
+    masking_signal(Primary primary, Mask mask)
+        : masking_signal::signal_wrapper(std::move(primary)),
+          mask_(std::move(mask))
+    {
+    }
+    bool
+    has_value() const
+    {
+        return mask_.has_value() && mask_.read() && this->wrapped_.has_value();
+    }
+    id_interface const&
+    value_id() const
+    {
+        if (mask_.has_value() && mask_.read())
+            return this->wrapped_.value_id();
+        else
+            return null_id;
+    }
+    bool
+    ready_to_write() const
+    {
+        return mask_.has_value() && mask_.read()
+               && this->wrapped_.ready_to_write();
+    }
+
+ private:
+    Mask mask_;
+};
+template<class Signal, class AvailabilityFlag>
+auto
+make_masking_signal(Signal signal, AvailabilityFlag availability_flag)
+{
+    return masking_signal<Signal, AvailabilityFlag>(
+        std::move(signal), std::move(availability_flag));
+}
+template<class Signal, class AvailabilityFlag>
+auto
+mask(Signal signal, AvailabilityFlag availability_flag)
+{
+    return make_masking_signal(
+        signalize(std::move(signal)), signalize(std::move(availability_flag)));
+}
+
+// mask_writes(signal, writability_flag) masks writes to :signal according to
+// the value of :writability_flag.
+//
+// :writability_flag can be either a signal or a raw value. If it evaluates to
+// true (in a boolean context), the mask evaluates to a signal equivalent to
+// :signal. Otherwise, it evaluates to one with equivalent reading behavior but
+// with writing disabled.
+//
+// Note that in either case, the masked version has the same capabilities as
+// :signal.
+//
+template<class Primary, class Mask>
+struct write_masking_signal
+    : signal_wrapper<write_masking_signal<Primary, Mask>, Primary>
+{
+    write_masking_signal()
+    {
+    }
+    write_masking_signal(Primary primary, Mask mask)
+        : write_masking_signal::signal_wrapper(std::move(primary)),
+          mask_(std::move(mask))
+    {
+    }
+    bool
+    ready_to_write() const
+    {
+        return mask_.has_value() && mask_.read()
+               && this->wrapped_.ready_to_write();
+    }
+
+ private:
+    Mask mask_;
+};
+template<class Signal, class WritabilityFlag>
+auto
+make_write_masking_signal(Signal signal, WritabilityFlag writability_flag)
+{
+    return write_masking_signal<Signal, WritabilityFlag>(
+        std::move(signal), std::move(writability_flag));
+}
+template<class Signal, class WritabilityFlag>
+auto
+mask_writes(Signal signal, WritabilityFlag writability_flag)
+{
+    return make_write_masking_signal(
+        std::move(signal), signalize(std::move(writability_flag)));
+}
+
+// disable_writes(s), where :s is a signal, yields a wrapper for :s where writes
+// are disabled. Like mask_signal, this doesn't change the capabilities of :s.
+template<class Signal>
+auto
+disable_writes(Signal s)
+{
+    return mask_writes(std::move(s), false);
+}
+
+// unwrap(signal), where :signal is a signal carrying a std::optional value,
+// yields a signal that directly carries the value wrapped inside the optional.
+template<class Wrapped>
+struct unwrapper_signal : casting_signal_wrapper<
+                              unwrapper_signal<Wrapped>,
+                              Wrapped,
+                              typename Wrapped::value_type::value_type>
+{
+    unwrapper_signal()
+    {
+    }
+    unwrapper_signal(Wrapped wrapped)
+        : unwrapper_signal::casting_signal_wrapper(std::move(wrapped))
+    {
+    }
+    bool
+    has_value() const
+    {
+        return this->wrapped_.has_value() && this->wrapped_.read().has_value();
+    }
+    typename Wrapped::value_type::value_type const&
+    read() const
+    {
+        return this->wrapped_.read().value();
+    }
+    typename Wrapped::value_type::value_type
+    movable_value() const
+    {
+        return this->wrapped_.movable_value().value();
+    }
+    id_interface const&
+    value_id() const
+    {
+        if (this->has_value())
+            return this->wrapped_.value_id();
+        else
+            return null_id;
+    }
+    void
+    write(typename Wrapped::value_type::value_type value) const
+    {
+        this->wrapped_.write(std::move(value));
+    }
+};
+template<class Signal>
+auto
+unwrap(Signal signal)
+{
+    return unwrapper_signal<Signal>(std::move(signal));
+}
+
+// move(signal) returns a signal with movement activated (if possible).
+//
+// If the input signal supports movement, the returned signal's value can be
+// moved out with move_signal() or forward_signal().
+//
+// If the input signal doesn't support movement, it's returned unchanged.
+//
+template<class Wrapped>
+struct signal_movement_activator
+    : signal_wrapper<
+          signal_movement_activator<Wrapped>,
+          Wrapped,
+          typename Wrapped::value_type,
+          signal_capabilities<
+              signal_movable,
+              typename Wrapped::capabilities::writing>>
+{
+    signal_movement_activator()
+    {
+    }
+    signal_movement_activator(Wrapped wrapped)
+        : signal_movement_activator::signal_wrapper(std::move(wrapped))
+    {
+    }
+};
+template<
+    class Signal,
+    std::enable_if_t<is_copyable_signal_type<Signal>::value, int> = 0>
+auto
+move(Signal signal)
+{
+    return signal_movement_activator<Signal>(std::move(signal));
+}
+template<
+    class Signal,
+    std::enable_if_t<
+        is_signal_type<Signal>::value && signal_is_readable<Signal>::value
+            && !signal_is_copyable<Signal>::value,
+        int> = 0>
+auto
+move(Signal signal)
+{
+    return signal;
+}
+
+} // namespace alia
 
 
 // This file defines the alia action interface, some common implementations of
@@ -2425,7 +3355,7 @@ void
 perform_action(action_interface<Args...> const& action, Args... args)
 {
     if (action.is_ready())
-        action.perform([]() {}, args...);
+        action.perform([]() {}, std::move(args)...);
 }
 
 // action_ref is a reference to an action that implements the action interface
@@ -2452,7 +3382,7 @@ struct action_ref : action_interface<Args...>
     void
     perform(function_view<void()> const& intermediary, Args... args) const
     {
-        action_->perform(intermediary, args...);
+        action_->perform(intermediary, std::move(args)...);
     }
 
  private:
@@ -2521,8 +3451,8 @@ template<class Action, class Signal, class BoundArg, class... Args>
 struct bound_action<Action, Signal, action_interface<BoundArg, Args...>>
     : action_interface<Args...>
 {
-    bound_action(Action const& action, Signal const& signal)
-        : action_(action), signal_(signal)
+    bound_action(Action action, Signal signal)
+        : action_(std::move(action)), signal_(std::move(signal))
     {
     }
 
@@ -2535,7 +3465,8 @@ struct bound_action<Action, Signal, action_interface<BoundArg, Args...>>
     void
     perform(function_view<void()> const& intermediary, Args... args) const
     {
-        action_.perform(intermediary, signal_.read(), args...);
+        action_.perform(
+            intermediary, forward_signal(signal_), std::move(args)...);
     }
 
  private:
@@ -2549,10 +3480,10 @@ template<
         is_action_type<Action>::value && is_readable_signal_type<Signal>::value,
         int> = 0>
 auto
-operator<<(Action const& action, Signal const& signal)
+operator<<(Action action, Signal signal)
 {
     return bound_action<Action, Signal, typename Action::action_interface>(
-        action, signal);
+        std::move(action), std::move(signal));
 }
 template<
     class Action,
@@ -2561,9 +3492,9 @@ template<
         is_action_type<Action>::value && !is_signal_type<Value>::value,
         int> = 0>
 auto
-operator<<(Action const& action, Value const& v)
+operator<<(Action action, Value v)
 {
-    return action << value(v);
+    return std::move(action) << value(std::move(v));
 }
 
 // operator <<=
@@ -2576,7 +3507,8 @@ operator<<(Action const& action, Value const& v)
 template<class Sink, class Source>
 struct copy_action : action_interface<>
 {
-    copy_action(Sink sink, Source source) : sink_(sink), source_(source)
+    copy_action(Sink sink, Source source)
+        : sink_(std::move(sink)), source_(std::move(source))
     {
     }
 
@@ -2589,9 +3521,9 @@ struct copy_action : action_interface<>
     void
     perform(function_view<void()> const& intermediary) const
     {
-        auto value = source_.read();
+        typename Source::value_type source_value = forward_signal(source_);
         intermediary();
-        sink_.write(value);
+        sink_.write(std::move(source_value));
     }
 
  private:
@@ -2609,7 +3541,7 @@ template<
 auto
 operator<<=(Sink sink, Source source)
 {
-    return copy_action<Sink, Source>(sink, source);
+    return copy_action<Sink, Source>(std::move(sink), std::move(source));
 }
 
 template<
@@ -2643,7 +3575,7 @@ toggle(Flag flag)
 template<class Container, class Item>
 struct push_back_action : action_interface<Item>
 {
-    push_back_action(Container container) : container_(container)
+    push_back_action(Container container) : container_(std::move(container))
     {
     }
 
@@ -2656,10 +3588,10 @@ struct push_back_action : action_interface<Item>
     void
     perform(function_view<void()> const& intermediary, Item item) const
     {
-        auto new_container = container_.read();
-        new_container.push_back(item);
+        auto new_container = forward_signal(alia::move(container_));
+        new_container.push_back(std::move(item));
         intermediary();
-        container_.write(new_container);
+        container_.write(std::move(new_container));
     }
 
  private:
@@ -2672,7 +3604,7 @@ push_back(Container container)
 {
     return push_back_action<
         Container,
-        typename Container::value_type::value_type>(container);
+        typename Container::value_type::value_type>(std::move(container));
 }
 
 // lambda_action(is_ready, perform) creates an action whose behavior is
@@ -3412,9 +4344,9 @@ refresh_keyed_data(keyed_data<Data>& data, id_interface const& key)
 
 template<class Data>
 void
-set(keyed_data<Data>& data, Data const& value)
+set(keyed_data<Data>& data, Data value)
 {
-    data.value = value;
+    data.value = std::move(value);
     mark_valid(data);
 }
 
@@ -3427,7 +4359,8 @@ get(keyed_data<Data> const& data)
 }
 
 template<class Data>
-struct keyed_data_signal : signal<keyed_data_signal<Data>, Data, duplex_signal>
+struct keyed_data_signal
+    : signal<keyed_data_signal<Data>, Data, readable_duplex_signal>
 {
     keyed_data_signal()
     {
@@ -3456,9 +4389,15 @@ struct keyed_data_signal : signal<keyed_data_signal<Data>, Data, duplex_signal>
         return true;
     }
     void
-    write(Data const& value) const
+    write(Data value) const
     {
-        alia::set(*data_, value);
+        alia::set(*data_, std::move(value));
+    }
+    Data
+    movable_value() const
+    {
+        Data movable = std::move(data_->value);
+        return movable;
     }
 
  private:
@@ -4216,577 +5155,6 @@ on_activate(context ctx, action<> on_activate);
 
 
 
-namespace alia {
-
-// signalize(x) turns x into a signal if it isn't already one.
-// Or, in other words...
-// signalize(s), where s is a signal, returns s.
-// signalize(v), where v is a raw value, returns a value signal carrying v.
-template<class Signal>
-std::enable_if_t<is_readable_signal_type<Signal>::value, Signal>
-signalize(Signal s)
-{
-    return s;
-}
-template<class Value, std::enable_if_t<!is_signal_type<Value>::value, int> = 0>
-auto
-signalize(Value v)
-{
-    return value(std::move(v));
-}
-
-// fake_readability(s), where :s is a signal, yields a wrapper for :s that
-// pretends to have read capabilities. It will never actually have a value, but
-// it will type-check as a readable signal.
-template<class Wrapped>
-struct readability_faker : signal<
-                               readability_faker<Wrapped>,
-                               typename Wrapped::value_type,
-                               typename signal_direction_union<
-                                   read_only_signal,
-                                   typename Wrapped::direction_tag>::type>
-{
-    readability_faker(Wrapped wrapped) : wrapped_(wrapped)
-    {
-    }
-    id_interface const&
-    value_id() const
-    {
-        return null_id;
-    }
-    bool
-    has_value() const
-    {
-        return false;
-    }
-    // Since this is only faking readability, read() should never be called.
-    // LCOV_EXCL_START
-    typename Wrapped::value_type const&
-    read() const
-    {
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wnull-dereference"
-#endif
-        return *(typename Wrapped::value_type const*) nullptr;
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
-    }
-    // LCOV_EXCL_STOP
-    bool
-    ready_to_write() const
-    {
-        return wrapped_.ready_to_write();
-    }
-    void
-    write(typename Wrapped::value_type const& value) const
-    {
-        return wrapped_.write(value);
-    }
-
- private:
-    Wrapped wrapped_;
-};
-template<class Wrapped>
-readability_faker<Wrapped>
-fake_readability(Wrapped const& wrapped)
-{
-    return readability_faker<Wrapped>(wrapped);
-}
-
-// fake_writability(s), where :s is a signal, yields a wrapper for :s that
-// pretends to have write capabilities. It will never actually be ready to
-// write, but it will type-check as a writable signal.
-template<class Wrapped>
-struct writability_faker : signal<
-                               writability_faker<Wrapped>,
-                               typename Wrapped::value_type,
-                               typename signal_direction_union<
-                                   write_only_signal,
-                                   typename Wrapped::direction_tag>::type>
-{
-    writability_faker(Wrapped wrapped) : wrapped_(wrapped)
-    {
-    }
-    id_interface const&
-    value_id() const
-    {
-        return wrapped_.value_id();
-    }
-    bool
-    has_value() const
-    {
-        return wrapped_.has_value();
-    }
-    typename Wrapped::value_type const&
-    read() const
-    {
-        return wrapped_.read();
-    }
-    bool
-    ready_to_write() const
-    {
-        return false;
-    }
-    // Since this is only faking writability, write() should never be called.
-    // LCOV_EXCL_START
-    void
-    write(typename Wrapped::value_type const&) const
-    {
-    }
-    // LCOV_EXCL_STOP
-
- private:
-    Wrapped wrapped_;
-};
-template<class Wrapped>
-writability_faker<Wrapped>
-fake_writability(Wrapped const& wrapped)
-{
-    return writability_faker<Wrapped>(wrapped);
-}
-
-// signal_cast<Value>(x), where :x is a signal, yields a proxy for :x with
-// the value type :Value. The proxy will apply static_casts to convert its
-// own values to and from :x's value type.
-template<class Wrapped, class To>
-struct casting_signal : regular_signal<
-                            casting_signal<Wrapped, To>,
-                            To,
-                            typename Wrapped::direction_tag>
-{
-    casting_signal(Wrapped wrapped) : wrapped_(wrapped)
-    {
-    }
-    bool
-    has_value() const
-    {
-        return wrapped_.has_value();
-    }
-    To const&
-    read() const
-    {
-        return lazy_reader_.read(
-            [&] { return static_cast<To>(wrapped_.read()); });
-    }
-    bool
-    ready_to_write() const
-    {
-        return wrapped_.ready_to_write();
-    }
-    void
-    write(To const& value) const
-    {
-        return wrapped_.write(static_cast<typename Wrapped::value_type>(value));
-    }
-
- private:
-    Wrapped wrapped_;
-    lazy_reader<To> lazy_reader_;
-};
-// Don't use a casting_signal if the value type is the same.
-template<class Wrapped, class To>
-struct signal_caster
-{
-    typedef casting_signal<Wrapped, To> type;
-    static type
-    apply(Wrapped wrapped)
-    {
-        return type(wrapped);
-    }
-};
-template<class Wrapped>
-struct signal_caster<Wrapped, typename Wrapped::value_type>
-{
-    typedef Wrapped type;
-    static type
-    apply(Wrapped wrapped)
-    {
-        return wrapped;
-    }
-};
-template<class To, class Wrapped>
-typename signal_caster<Wrapped, To>::type
-signal_cast(Wrapped wrapped)
-{
-    return signal_caster<Wrapped, To>::apply(wrapped);
-}
-
-// has_value(x) yields a signal to a boolean which indicates whether or not :x
-// has a value. (The returned signal itself always has a value.)
-template<class Wrapped>
-struct value_presence_signal
-    : regular_signal<value_presence_signal<Wrapped>, bool, read_only_signal>
-{
-    value_presence_signal(Wrapped const& wrapped) : wrapped_(wrapped)
-    {
-    }
-    bool
-    has_value() const
-    {
-        return true;
-    }
-    bool const&
-    read() const
-    {
-        value_ = wrapped_.has_value();
-        return value_;
-    }
-
- private:
-    Wrapped wrapped_;
-    mutable bool value_;
-};
-template<class Wrapped>
-auto
-has_value(Wrapped const& wrapped)
-{
-    return value_presence_signal<Wrapped>(wrapped);
-}
-
-// ready_to_write(x) yields a signal to a boolean that indicates whether or not
-// :x is ready to write. (The returned signal always has a value.)
-template<class Wrapped>
-struct write_readiness_signal
-    : regular_signal<write_readiness_signal<Wrapped>, bool, read_only_signal>
-{
-    write_readiness_signal(Wrapped const& wrapped) : wrapped_(wrapped)
-    {
-    }
-    bool
-    has_value() const
-    {
-        return true;
-    }
-    bool const&
-    read() const
-    {
-        value_ = wrapped_.ready_to_write();
-        return value_;
-    }
-
- private:
-    Wrapped wrapped_;
-    mutable bool value_;
-};
-template<class Wrapped>
-auto
-ready_to_write(Wrapped const& wrapped)
-{
-    return write_readiness_signal<Wrapped>(wrapped);
-}
-
-// add_fallback(primary, fallback), where :primary and :fallback are both
-// signals, yields another signal whose value is that of :primary if it has one
-// and that of :fallback otherwise.
-// All writes go directly to :primary.
-template<class Primary, class Fallback>
-struct fallback_signal : signal<
-                             fallback_signal<Primary, Fallback>,
-                             typename Primary::value_type,
-                             typename Primary::direction_tag>
-{
-    fallback_signal()
-    {
-    }
-    fallback_signal(Primary primary, Fallback fallback)
-        : primary_(primary), fallback_(fallback)
-    {
-    }
-    bool
-    has_value() const
-    {
-        return primary_.has_value() || fallback_.has_value();
-    }
-    typename Primary::value_type const&
-    read() const
-    {
-        return primary_.has_value() ? primary_.read() : fallback_.read();
-    }
-    id_interface const&
-    value_id() const
-    {
-        id_ = combine_ids(
-            make_id(primary_.has_value()),
-            primary_.has_value() ? ref(primary_.value_id())
-                                 : ref(fallback_.value_id()));
-        return id_;
-    }
-    bool
-    ready_to_write() const
-    {
-        return primary_.ready_to_write();
-    }
-    void
-    write(typename Primary::value_type const& value) const
-    {
-        primary_.write(value);
-    }
-
- private:
-    mutable id_pair<simple_id<bool>, id_ref> id_;
-    Primary primary_;
-    Fallback fallback_;
-};
-template<class Primary, class Fallback>
-fallback_signal<Primary, Fallback>
-make_fallback_signal(Primary primary, Fallback fallback)
-{
-    return fallback_signal<Primary, Fallback>(primary, fallback);
-}
-template<class Primary, class Fallback>
-auto
-add_fallback(Primary primary, Fallback fallback)
-{
-    return make_fallback_signal(signalize(primary), signalize(fallback));
-}
-
-// simplify_id(s), where :s is a signal, yields a wrapper for :s with the exact
-// same read/write behavior but whose value ID is a simple_id (i.e., it is
-// simply the value of the signal).
-//
-// The main utility of this is in cases where you have a signal carrying a
-// small value with a complicated value ID (because it was picked from the
-// signal of a larger data structure, for example). The more complicated ID
-// might change superfluously.
-//
-template<class Wrapped>
-struct simplified_id_wrapper : regular_signal<
-                                   simplified_id_wrapper<Wrapped>,
-                                   typename Wrapped::value_type,
-                                   typename Wrapped::direction_tag>
-{
-    simplified_id_wrapper(Wrapped wrapped) : wrapped_(wrapped)
-    {
-    }
-    bool
-    has_value() const
-    {
-        return wrapped_.has_value();
-    }
-    typename Wrapped::value_type const&
-    read() const
-    {
-        return wrapped_.read();
-    }
-    bool
-    ready_to_write() const
-    {
-        return wrapped_.ready_to_write();
-    }
-    void
-    write(typename Wrapped::value_type const& value) const
-    {
-        return wrapped_.write(value);
-    }
-
- private:
-    Wrapped wrapped_;
-};
-template<class Wrapped>
-simplified_id_wrapper<Wrapped>
-simplify_id(Wrapped wrapped)
-{
-    return simplified_id_wrapper<Wrapped>(wrapped);
-}
-
-// mask(signal, availibility_flag) does the equivalent of bit masking on
-// individual signals. If :availibility_flag evaluates to true, the mask
-// evaluates to signal equivalent to :signal. Otherwise, it evaluates to an
-// empty signal of the same type.
-template<class Primary, class Mask>
-struct masking_signal : signal<
-                            masking_signal<Primary, Mask>,
-                            typename Primary::value_type,
-                            typename Primary::direction_tag>
-{
-    masking_signal()
-    {
-    }
-    masking_signal(Primary primary, Mask mask) : primary_(primary), mask_(mask)
-    {
-    }
-    bool
-    has_value() const
-    {
-        return mask_.has_value() && mask_.read() && primary_.has_value();
-    }
-    typename Primary::value_type const&
-    read() const
-    {
-        return primary_.read();
-    }
-    id_interface const&
-    value_id() const
-    {
-        if (mask_.has_value() && mask_.read())
-            return primary_.value_id();
-        else
-            return null_id;
-    }
-    bool
-    ready_to_write() const
-    {
-        return mask_.has_value() && mask_.read() && primary_.ready_to_write();
-    }
-    void
-    write(typename Primary::value_type const& value) const
-    {
-        primary_.write(value);
-    }
-
- private:
-    Primary primary_;
-    Mask mask_;
-};
-template<class Signal, class AvailabilityFlag>
-auto
-make_masking_signal(Signal signal, AvailabilityFlag availability_flag)
-{
-    return masking_signal<Signal, AvailabilityFlag>(signal, availability_flag);
-}
-template<class Signal, class AvailabilityFlag>
-auto
-mask(Signal signal, AvailabilityFlag availability_flag)
-{
-    return make_masking_signal(signalize(signal), signalize(availability_flag));
-}
-
-// mask_writes(signal, writability_flag) masks writes to :signal according to
-// the value of :writability_flag.
-//
-// :writability_flag can be either a signal or a raw value. If it evaluates to
-// true (in a boolean context), the mask evaluates to a signal equivalent to
-// :signal. Otherwise, it evaluates to one with equivalent reading behavior but
-// with writing disabled.
-//
-// Note that in either case, the masked version has the same directionality as
-// :signal.
-//
-template<class Primary, class Mask>
-struct write_masking_signal : signal<
-                                  write_masking_signal<Primary, Mask>,
-                                  typename Primary::value_type,
-                                  typename Primary::direction_tag>
-{
-    write_masking_signal()
-    {
-    }
-    write_masking_signal(Primary primary, Mask mask)
-        : primary_(primary), mask_(mask)
-    {
-    }
-    bool
-    has_value() const
-    {
-        return primary_.has_value();
-    }
-    typename Primary::value_type const&
-    read() const
-    {
-        return primary_.read();
-    }
-    id_interface const&
-    value_id() const
-    {
-        return primary_.value_id();
-    }
-    bool
-    ready_to_write() const
-    {
-        return mask_.has_value() && mask_.read() && primary_.ready_to_write();
-    }
-    void
-    write(typename Primary::value_type const& value) const
-    {
-        primary_.write(value);
-    }
-
- private:
-    Primary primary_;
-    Mask mask_;
-};
-template<class Signal, class WritabilityFlag>
-auto
-make_write_masking_signal(Signal signal, WritabilityFlag writability_flag)
-{
-    return write_masking_signal<Signal, WritabilityFlag>(
-        signal, writability_flag);
-}
-template<class Signal, class WritabilityFlag>
-auto
-mask_writes(Signal signal, WritabilityFlag writability_flag)
-{
-    return make_write_masking_signal(signal, signalize(writability_flag));
-}
-
-// disable_writes(s), where :s is a signal, yields a wrapper for :s where writes
-// are disabled. Like mask_signal, this doesn't change the directionality of :s.
-template<class Signal>
-auto
-disable_writes(Signal s)
-{
-    return mask_writes(s, false);
-}
-
-// unwrap(signal), where :signal is a signal carrying a std::optional value,
-// yields a signal that directly carries the value wrapped inside the optional.
-template<class Wrapped>
-struct unwrapper_signal : signal<
-                              unwrapper_signal<Wrapped>,
-                              typename Wrapped::value_type::value_type,
-                              typename Wrapped::direction_tag>
-{
-    unwrapper_signal()
-    {
-    }
-    unwrapper_signal(Wrapped wrapped) : wrapped_(wrapped)
-    {
-    }
-    bool
-    has_value() const
-    {
-        return wrapped_.has_value() && wrapped_.read().has_value();
-    }
-    typename Wrapped::value_type::value_type const&
-    read() const
-    {
-        return wrapped_.read().value();
-    }
-    id_interface const&
-    value_id() const
-    {
-        if (this->has_value())
-            return wrapped_.value_id();
-        else
-            return null_id;
-    }
-    bool
-    ready_to_write() const
-    {
-        return wrapped_.ready_to_write();
-    }
-    void
-    write(typename Wrapped::value_type::value_type const& value) const
-    {
-        wrapped_.write(value);
-    }
-
- private:
-    Wrapped wrapped_;
-};
-template<class Signal>
-auto
-unwrap(Signal signal)
-{
-    return unwrapper_signal<Signal>(signal);
-}
-
-} // namespace alia
-
-
-
 
 namespace alia {
 
@@ -4797,12 +5165,13 @@ namespace alia {
 // just doing the two overloads I need for now...
 
 template<class Result, class Function, class Arg>
-struct lazy_apply1_signal : signal<
+struct lazy_apply1_signal : lazy_signal<
                                 lazy_apply1_signal<Result, Function, Arg>,
                                 Result,
                                 read_only_signal>
 {
-    lazy_apply1_signal(Function f, Arg arg) : f_(f), arg_(arg)
+    lazy_apply1_signal(Function f, Arg arg)
+        : f_(std::move(f)), arg_(std::move(arg))
     {
     }
     id_interface const&
@@ -4815,34 +5184,33 @@ struct lazy_apply1_signal : signal<
     {
         return arg_.has_value();
     }
-    Result const&
-    read() const
+    Result
+    movable_value() const
     {
-        return lazy_reader_.read([&] { return f_(arg_.read()); });
+        return f_(forward_signal(arg_));
     }
 
  private:
     Function f_;
     Arg arg_;
-    lazy_reader<Result> lazy_reader_;
 };
 template<class Function, class Arg>
 auto
 lazy_apply(Function f, Arg arg)
 {
     return lazy_apply1_signal<decltype(f(read_signal(arg))), Function, Arg>(
-        f, arg);
+        std::move(f), std::move(arg));
 }
 
 template<class Result, class Function, class Arg0, class Arg1>
 struct lazy_apply2_signal
-    : signal<
+    : lazy_signal<
           lazy_apply2_signal<Result, Function, Arg0, Arg1>,
           Result,
           read_only_signal>
 {
     lazy_apply2_signal(Function f, Arg0 arg0, Arg1 arg1)
-        : f_(f), arg0_(arg0), arg1_(arg1)
+        : f_(std::move(f)), arg0_(std::move(arg0)), arg1_(std::move(arg1))
     {
     }
     id_interface const&
@@ -4856,11 +5224,10 @@ struct lazy_apply2_signal
     {
         return arg0_.has_value() && arg1_.has_value();
     }
-    Result const&
-    read() const
+    Result
+    movable_value() const
     {
-        return lazy_reader_.read(
-            [&]() { return f_(arg0_.read(), arg1_.read()); });
+        return f_(forward_signal(arg0_), forward_signal(arg1_));
     }
 
  private:
@@ -4868,7 +5235,6 @@ struct lazy_apply2_signal
     Arg0 arg0_;
     Arg1 arg1_;
     mutable id_pair<id_ref, id_ref> id_;
-    lazy_reader<Result> lazy_reader_;
 };
 template<class Function, class Arg0, class Arg1>
 auto
@@ -4878,14 +5244,14 @@ lazy_apply(Function f, Arg0 arg0, Arg1 arg1)
         decltype(f(read_signal(arg0), read_signal(arg1))),
         Function,
         Arg0,
-        Arg1>(f, arg0, arg1);
+        Arg1>(f, std::move(arg0), std::move(arg1));
 }
 
 template<class Function>
 auto
 lazy_lift(Function f)
 {
-    return [=](auto&&... args) { return lazy_apply(f, args...); };
+    return [=](auto... args) { return lazy_apply(f, std::move(args)...); };
 }
 
 // apply(ctx, f, args...), where :args are all signals, yields a signal to the
@@ -5016,13 +5382,18 @@ template<class Function>
 auto
 lift(Function f)
 {
-    return [=](context ctx, auto&&... args) { return apply(ctx, f, args...); };
+    return [=](context ctx, auto&&... args) {
+        return apply(ctx, std::move(f), std::move(args)...);
+    };
 }
 
 // alia_mem_fn(m) wraps a member function name in a lambda so that it can be
 // passed as a function object. (It's the equivalent of std::mem_fn, but there's
 // no need to provide the type name.)
-#define ALIA_MEM_FN(m) [](auto&& x, auto&&... args) { return x.m(args...); }
+#define ALIA_MEM_FN(m)                                                         \
+    [](auto&& x, auto&&... args) {                                             \
+        return x.m(std::forward<decltype(args)>(args)...);                     \
+    }
 #ifndef ALIA_STRICT_MACROS
 #define alia_mem_fn(m) ALIA_MEM_FN(m)
 #endif
@@ -5050,7 +5421,7 @@ ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(+)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(-)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(*)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(/)
-ALIA_DEFINE_BINARY_SIGNAL_OPERATOR (^)
+ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(^)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(%)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(&)
 ALIA_DEFINE_BINARY_SIGNAL_OPERATOR(|)
@@ -5092,7 +5463,7 @@ ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(+)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(-)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(*)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(/)
-ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR (^)
+ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(^)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(%)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(&)
 ALIA_DEFINE_LIBERAL_BINARY_SIGNAL_OPERATOR(|)
@@ -5356,9 +5727,9 @@ template<class Condition, class T, class F>
 struct signal_mux : signal<
                         signal_mux<Condition, T, F>,
                         typename T::value_type,
-                        typename signal_direction_intersection<
-                            typename T::direction_tag,
-                            typename F::direction_tag>::type>
+                        typename signal_capabilities_intersection<
+                            typename T::capabilities,
+                            typename F::capabilities>::type>
 {
     signal_mux(Condition condition, T t, F f)
         : condition_(condition), t_(t), f_(f)
@@ -5374,6 +5745,11 @@ struct signal_mux : signal<
     read() const
     {
         return condition_.read() ? t_.read() : f_.read();
+    }
+    typename T::value_type
+    movable_value() const
+    {
+        return condition_.read() ? t_.movable_value() : f_.movable_value();
     }
     id_interface const&
     value_id() const
@@ -5393,12 +5769,28 @@ struct signal_mux : signal<
                                      : f_.ready_to_write());
     }
     void
-    write(typename T::value_type const& value) const
+    write(typename T::value_type value) const
     {
         if (condition_.read())
             t_.write(value);
         else
             f_.write(value);
+    }
+    bool
+    invalidate(std::exception_ptr error) const
+    {
+        if (condition_.read())
+            return t_.invalidate(error);
+        else
+            return f_.invalidate(error);
+    }
+    bool
+    is_invalidated() const
+    {
+        if (condition_.read())
+            return t_.is_invalidated();
+        else
+            return f_.is_invalidated();
     }
 
  private:
@@ -5427,7 +5819,9 @@ template<class StructureSignal, class Field>
 struct field_signal : preferred_id_signal<
                           field_signal<StructureSignal, Field>,
                           Field,
-                          typename StructureSignal::direction_tag,
+                          typename signal_capabilities_intersection<
+                              typename StructureSignal::capabilities,
+                              readable_duplex_signal>::type,
                           id_pair<id_ref, simple_id<Field*>>>
 {
     typedef typename StructureSignal::value_type structure_type;
@@ -5463,7 +5857,7 @@ struct field_signal : preferred_id_signal<
         return structure_.has_value() && structure_.ready_to_write();
     }
     void
-    write(Field const& x) const
+    write(Field x) const
     {
         structure_type s = structure_.read();
         s.*field_ = x;
@@ -5644,18 +6038,16 @@ struct const_subscript_invoker<
 template<class ContainerSignal, class IndexSignal, class Value>
 std::enable_if_t<signal_is_writable<ContainerSignal>::value>
 write_subscript(
-    ContainerSignal const& container,
-    IndexSignal const& index,
-    Value const& value)
+    ContainerSignal const& container, IndexSignal const& index, Value value)
 {
     auto new_container = container.read();
-    new_container[index.read()] = value;
-    container.write(new_container);
+    new_container[index.read()] = std::move(value);
+    container.write(std::move(new_container));
 }
 
 template<class ContainerSignal, class IndexSignal, class Value>
 std::enable_if_t<!signal_is_writable<ContainerSignal>::value>
-write_subscript(ContainerSignal const&, IndexSignal const&, Value const&)
+write_subscript(ContainerSignal const&, IndexSignal const&, Value)
 {
 }
 
@@ -5665,14 +6057,14 @@ struct subscript_signal : preferred_id_signal<
                               typename subscript_result_type<
                                   typename ContainerSignal::value_type,
                                   typename IndexSignal::value_type>::type,
-                              typename ContainerSignal::direction_tag,
+                              typename ContainerSignal::capabilities,
                               id_pair<alia::id_ref, alia::id_ref>>
 {
     subscript_signal()
     {
     }
     subscript_signal(ContainerSignal array, IndexSignal index)
-        : container_(array), index_(index)
+        : container_(std::move(array)), index_(std::move(index))
     {
     }
     bool
@@ -5682,6 +6074,11 @@ struct subscript_signal : preferred_id_signal<
     }
     typename subscript_signal::value_type const&
     read() const
+    {
+        return invoker_(container_.read(), index_.read());
+    }
+    typename subscript_signal::value_type
+    movable_value() const
     {
         return invoker_(container_.read(), index_.read());
     }
@@ -5697,9 +6094,9 @@ struct subscript_signal : preferred_id_signal<
                && container_.ready_to_write();
     }
     void
-    write(typename subscript_signal::value_type const& x) const
+    write(typename subscript_signal::value_type x) const
     {
-        write_subscript(container_, index_, x);
+        write_subscript(container_, index_, std::move(x));
     }
 
  private:
@@ -5714,15 +6111,17 @@ template<class ContainerSignal, class IndexSignal>
 subscript_signal<ContainerSignal, IndexSignal>
 make_subscript_signal(ContainerSignal container, IndexSignal index)
 {
-    return subscript_signal<ContainerSignal, IndexSignal>(container, index);
+    return subscript_signal<ContainerSignal, IndexSignal>(
+        std::move(container), std::move(index));
 }
 
-template<class Derived, class Value, class Direction>
+template<class Derived, class Value, class Capabilities>
 template<class Index>
-auto signal_base<Derived, Value, Direction>::operator[](Index index) const
+auto
+signal_base<Derived, Value, Capabilities>::operator[](Index index) const
 {
     return make_subscript_signal(
-        static_cast<Derived const&>(*this), signalize(index));
+        static_cast<Derived const&>(*this), signalize(std::move(index)));
 }
 
 } // namespace alia
@@ -5756,7 +6155,10 @@ struct is_vector_like : std::false_type
 template<class Container>
 struct is_vector_like<
     Container,
-    void_t<decltype(std::declval<Container>()[size_t(0)])>> : std::true_type
+    void_t<
+        typename Container::value_type,
+        typename Container::size_type,
+        decltype(std::declval<Container>().at(size_t(0)))>> : std::true_type
 {
 };
 
@@ -5767,13 +6169,64 @@ get_alia_id(Item const&)
     return null_id;
 }
 
+// invoke_map_iteration_body selects the appropriate way to invoke the iteration
+// body function provided to for_each (for map-like containers).
+template<
+    class IterationBody,
+    class Context,
+    class NamedBlockBegin,
+    class Key,
+    class Value,
+    std::enable_if_t<
+        is_invocable<
+            IterationBody&&,
+            Context,
+            naming_context&,
+            Key&&,
+            Value&&>::value,
+        int> = 0>
+void
+invoke_map_iteration_body(
+    IterationBody&& body,
+    Context ctx,
+    naming_context& nc,
+    NamedBlockBegin&&,
+    Key&& key,
+    Value&& value)
+{
+    body(ctx, nc, key, value);
+}
+template<
+    class IterationBody,
+    class Context,
+    class NamedBlockBegin,
+    class Key,
+    class Value,
+    std::enable_if_t<
+        is_invocable<IterationBody&&, Context, Key&&, Value&&>::value,
+        int> = 0>
+void
+invoke_map_iteration_body(
+    IterationBody&& body,
+    Context ctx,
+    naming_context&,
+    NamedBlockBegin&& nb_begin,
+    Key&& key,
+    Value&& value)
+{
+    named_block nb;
+    nb_begin(nb);
+    body(ctx, key, value);
+}
+
 // for_each for map-like containers
 template<
     class Context,
     class ContainerSignal,
     class Fn,
     std::enable_if_t<
-        is_map_like<typename ContainerSignal::value_type>::value,
+        is_signal_type<ContainerSignal>::value
+            && is_map_like<typename ContainerSignal::value_type>::value,
         int> = 0>
 void
 for_each(Context ctx, ContainerSignal const& container_signal, Fn&& fn)
@@ -5784,27 +6237,116 @@ for_each(Context ctx, ContainerSignal const& container_signal, Fn&& fn)
         auto const& container = read_signal(container_signal);
         for (auto const& item : container)
         {
-            named_block nb;
-            auto iteration_id = get_alia_id(item.first);
-            if (iteration_id != null_id)
-                nb.begin(nc, iteration_id);
-            else
-                nb.begin(nc, make_id(&item));
             auto key = direct(item.first);
             auto value = container_signal[key];
-            fn(ctx, key, value);
+            invoke_map_iteration_body(
+                fn,
+                ctx,
+                nc,
+                [&](named_block& nb) { nb.begin(nc, make_id(item.first)); },
+                key,
+                value);
         }
     }
     ALIA_END
 }
 
-// for_each for vector-like containers
+// invoke_sequence_iteration_body selects the appropriate way to invoke the
+// iteration body function provided to for_each (for sequence containers).
+template<
+    class IterationBody,
+    class Context,
+    class NamedBlockBegin,
+    class Item,
+    std::enable_if_t<
+        is_invocable<
+            IterationBody&&,
+            Context,
+            naming_context&,
+            size_t,
+            Item&&>::value,
+        int> = 0>
+void
+invoke_sequence_iteration_body(
+    IterationBody&& body,
+    Context ctx,
+    naming_context& nc,
+    NamedBlockBegin&&,
+    size_t index,
+    Item&& item)
+{
+    body(ctx, nc, index, item);
+}
+template<
+    class IterationBody,
+    class Context,
+    class NamedBlockBegin,
+    class Item,
+    std::enable_if_t<
+        is_invocable<IterationBody&&, Context, size_t, Item&&>::value,
+        int> = 0>
+void
+invoke_sequence_iteration_body(
+    IterationBody&& body,
+    Context ctx,
+    naming_context&,
+    NamedBlockBegin&& nb_begin,
+    size_t index,
+    Item&& item)
+{
+    named_block nb;
+    nb_begin(nb);
+    body(ctx, index, item);
+}
+template<
+    class IterationBody,
+    class Context,
+    class NamedBlockBegin,
+    class Item,
+    std::enable_if_t<
+        is_invocable<IterationBody&&, Context, naming_context&, Item&&>::value,
+        int> = 0>
+void
+invoke_sequence_iteration_body(
+    IterationBody&& body,
+    Context ctx,
+    naming_context& nc,
+    NamedBlockBegin&&,
+    size_t,
+    Item&& item)
+{
+    body(ctx, nc, item);
+}
+template<
+    class IterationBody,
+    class Context,
+    class NamedBlockBegin,
+    class Item,
+    std::enable_if_t<
+        is_invocable<IterationBody&&, Context, Item&&>::value,
+        int> = 0>
+void
+invoke_sequence_iteration_body(
+    IterationBody&& body,
+    Context ctx,
+    naming_context&,
+    NamedBlockBegin&& nb_begin,
+    size_t,
+    Item&& item)
+{
+    named_block nb;
+    nb_begin(nb);
+    body(ctx, item);
+}
+
+// for_each for signals carrying vector-like containers
 template<
     class Context,
     class ContainerSignal,
     class Fn,
     std::enable_if_t<
-        !is_map_like<typename ContainerSignal::value_type>::value
+        is_signal_type<ContainerSignal>::value
+            && !is_map_like<typename ContainerSignal::value_type>::value
             && is_vector_like<typename ContainerSignal::value_type>::value,
         int> = 0>
 void
@@ -5817,16 +6359,100 @@ for_each(Context ctx, ContainerSignal const& container_signal, Fn&& fn)
         size_t const item_count = container.size();
         for (size_t index = 0; index != item_count; ++index)
         {
-            named_block nb;
-            auto iteration_id = get_alia_id(container[index]);
-            if (iteration_id != null_id)
-                nb.begin(nc, iteration_id);
-            else
-                nb.begin(nc, make_id(index));
-            fn(ctx, container_signal[value(index)]);
+            invoke_sequence_iteration_body(
+                fn,
+                ctx,
+                nc,
+                [&](named_block& nb) {
+                    auto iteration_id = get_alia_id(container[index]);
+                    if (iteration_id != null_id)
+                        nb.begin(nc, iteration_id);
+                    else
+                        nb.begin(nc, make_id(index));
+                },
+                index,
+                container_signal[value(index)]);
         }
     }
     ALIA_END
+}
+
+// for_each for vector-like containers of signals
+template<
+    class Context,
+    class Container,
+    class Fn,
+    std::enable_if_t<
+        !is_signal_type<
+            std::remove_cv_t<std::remove_reference_t<Container>>>::value
+            && !is_map_like<
+                std::remove_cv_t<std::remove_reference_t<Container>>>::value
+            && is_vector_like<
+                std::remove_cv_t<std::remove_reference_t<Container>>>::value
+            && is_signal_type<typename std::remove_cv_t<
+                std::remove_reference_t<Container>>::value_type>::value,
+        int> = 0>
+void
+for_each(Context ctx, Container&& container, Fn&& fn)
+{
+    naming_context nc(ctx);
+    size_t index = 0;
+    for (auto&& item : container)
+    {
+        invoke_sequence_iteration_body(
+            fn,
+            ctx,
+            nc,
+            [&](named_block& nb) {
+                // We don't try to use get_alia_id() here because we want to
+                // support the use case where the UI is present even when the
+                // item isn't available, and we want to keep the block ID
+                // stable in that scenario.
+                nb.begin(nc, make_id(index));
+            },
+            index,
+            item);
+        ++index;
+    }
+}
+
+// for_each for vector-like containers of raw values
+template<
+    class Context,
+    class Container,
+    class Fn,
+    std::enable_if_t<
+        !is_signal_type<
+            std::remove_cv_t<std::remove_reference_t<Container>>>::value
+            && !is_map_like<
+                std::remove_cv_t<std::remove_reference_t<Container>>>::value
+            && is_vector_like<
+                std::remove_cv_t<std::remove_reference_t<Container>>>::value
+            && !is_signal_type<typename std::remove_cv_t<
+                std::remove_reference_t<Container>>::value_type>::value,
+        int> = 0>
+void
+for_each(Context ctx, Container&& container, Fn&& fn)
+{
+    naming_context nc(ctx);
+    size_t index = 0;
+    for (auto&& item : container)
+    {
+        invoke_sequence_iteration_body(
+            fn,
+            ctx,
+            nc,
+            [&](named_block& nb) {
+                auto iteration_id = get_alia_id(item);
+                if (iteration_id != null_id)
+                    nb.begin(nc, iteration_id);
+                else
+                    nb.begin(nc, make_id(index));
+            },
+            index,
+            item);
+        ++index;
+    }
 }
 
 // signal type for accessing items within a list
@@ -5834,7 +6460,7 @@ template<class ListSignal, class Item>
 struct list_item_signal : signal<
                               list_item_signal<ListSignal, Item>,
                               Item,
-                              typename ListSignal::direction_tag>
+                              typename ListSignal::capabilities>
 {
     list_item_signal(ListSignal const& list_signal, size_t index, Item* item)
         : list_signal_(list_signal), index_(index), item_(item)
@@ -5856,15 +6482,20 @@ struct list_item_signal : signal<
     {
         return *item_;
     }
+    Item
+    movable_value() const
+    {
+        return *item_;
+    }
     bool
     ready_to_write() const
     {
         return list_signal_.ready_to_write();
     }
     void
-    write(Item const& value) const
+    write(Item value) const
     {
-        *item_ = value;
+        *item_ = std::move(value);
     }
 
  private:
@@ -5881,13 +6512,14 @@ make_list_item_signal(ListSignal const& signal, size_t index, Item const* item)
         signal, index, const_cast<Item*>(item));
 }
 
-// for_each for list-like containers
+// for_each for list-like signal containers
 template<
     class Context,
     class ContainerSignal,
     class Fn,
     std::enable_if_t<
-        !is_map_like<typename ContainerSignal::value_type>::value
+        is_signal_type<ContainerSignal>::value
+            && !is_map_like<typename ContainerSignal::value_type>::value
             && !is_vector_like<typename ContainerSignal::value_type>::value,
         int> = 0>
 void
@@ -5900,17 +6532,101 @@ for_each(Context ctx, ContainerSignal const& container_signal, Fn&& fn)
         size_t index = 0;
         for (auto const& item : container)
         {
-            named_block nb;
-            auto iteration_id = get_alia_id(item);
-            if (iteration_id != null_id)
-                nb.begin(nc, iteration_id);
-            else
-                nb.begin(nc, make_id(&item));
-            fn(ctx, make_list_item_signal(container_signal, index, &item));
+            invoke_sequence_iteration_body(
+                fn,
+                ctx,
+                nc,
+                [&](named_block& nb) {
+                    auto iteration_id = get_alia_id(item);
+                    if (iteration_id != null_id)
+                        nb.begin(nc, iteration_id);
+                    else
+                        nb.begin(nc, make_id(&item));
+                },
+                index,
+                make_list_item_signal(container_signal, index, &item));
             ++index;
         }
     }
     ALIA_END
+}
+
+// for_each for list-like containers of signals
+template<
+    class Context,
+    class Container,
+    class Fn,
+    std::enable_if_t<
+        !is_signal_type<
+            std::remove_cv_t<std::remove_reference_t<Container>>>::value
+            && !is_map_like<
+                std::remove_cv_t<std::remove_reference_t<Container>>>::value
+            && !is_vector_like<
+                std::remove_cv_t<std::remove_reference_t<Container>>>::value
+            && is_signal_type<typename std::remove_cv_t<
+                std::remove_reference_t<Container>>::value_type>::value,
+        int> = 0>
+void
+for_each(Context ctx, Container&& container, Fn&& fn)
+{
+    naming_context nc(ctx);
+    size_t index = 0;
+    for (auto&& item : container)
+    {
+        invoke_sequence_iteration_body(
+            fn,
+            ctx,
+            nc,
+            [&](named_block& nb) {
+                // We don't try to use get_alia_id() here because we want to
+                // support the use case where the UI is present even when the
+                // item isn't available, and we want to keep the block ID stable
+                // in that scenario.
+                nb.begin(nc, make_id(&item));
+            },
+            index,
+            item);
+        ++index;
+    }
+}
+
+// for_each for list-like containers of raw values
+template<
+    class Context,
+    class Container,
+    class Fn,
+    std::enable_if_t<
+        !is_signal_type<
+            std::remove_cv_t<std::remove_reference_t<Container>>>::value
+            && !is_map_like<
+                std::remove_cv_t<std::remove_reference_t<Container>>>::value
+            && !is_vector_like<
+                std::remove_cv_t<std::remove_reference_t<Container>>>::value
+            && !is_signal_type<typename std::remove_cv_t<
+                std::remove_reference_t<Container>>::value_type>::value,
+        int> = 0>
+void
+for_each(Context ctx, Container&& container, Fn&& fn)
+{
+    naming_context nc(ctx);
+    size_t index = 0;
+    for (auto&& item : container)
+    {
+        invoke_sequence_iteration_body(
+            fn,
+            ctx,
+            nc,
+            [&](named_block& nb) {
+                auto iteration_id = get_alia_id(item);
+                if (iteration_id != null_id)
+                    nb.begin(nc, iteration_id);
+                else
+                    nb.begin(nc, make_id(&item));
+            },
+            index,
+            item);
+        ++index;
+    }
 }
 
 } // namespace alia
@@ -6628,7 +7344,9 @@ struct simple_lambda_constant_signal
           Value,
           read_only_signal>
 {
-    simple_lambda_constant_signal(Read read) : read_(read)
+    simple_lambda_constant_signal(Read read)
+        : read_(read), value_(decltype(read())())
+
     {
     }
     bool
@@ -6669,7 +7387,8 @@ struct simple_lambda_reader_signal
           Value,
           read_only_signal>
 {
-    simple_lambda_reader_signal(Read read) : read_(read)
+    simple_lambda_reader_signal(Read read)
+        : read_(read), value_(decltype(read())())
     {
     }
     bool
@@ -6705,7 +7424,7 @@ struct lambda_reader_signal : regular_signal<
                                   read_only_signal>
 {
     lambda_reader_signal(HasValue has_value, Read read)
-        : has_value_(has_value), read_(read)
+        : has_value_(has_value), read_(read), value_(decltype(read())())
     {
     }
     bool
@@ -6745,7 +7464,10 @@ struct lambda_reader_signal_with_id
 {
     lambda_reader_signal_with_id(
         HasValue has_value, Read read, GenerateId generate_id)
-        : has_value_(has_value), read_(read), generate_id_(generate_id)
+        : has_value_(has_value),
+          read_(read),
+          value_(decltype(read())()),
+          generate_id_(generate_id)
     {
     }
     id_interface const&
@@ -6797,12 +7519,13 @@ struct lambda_duplex_signal
     : regular_signal<
           lambda_duplex_signal<Value, HasValue, Read, ReadyToWrite, Write>,
           Value,
-          duplex_signal>
+          signal_capabilities<signal_readable, signal_writable>>
 {
     lambda_duplex_signal(
         HasValue has_value, Read read, ReadyToWrite ready_to_write, Write write)
         : has_value_(has_value),
           read_(read),
+          value_(decltype(read())()),
           ready_to_write_(ready_to_write),
           write_(write)
     {
@@ -6824,9 +7547,9 @@ struct lambda_duplex_signal
         return ready_to_write_();
     }
     void
-    write(Value const& value) const
+    write(Value value) const
     {
-        write_(value);
+        write_(std::move(value));
     }
 
  private:
@@ -6860,16 +7583,17 @@ template<
     class ReadyToWrite,
     class Write,
     class GenerateId>
-struct lambda_duplex_signal_with_id : signal<
-                                          lambda_duplex_signal_with_id<
-                                              Value,
-                                              HasValue,
-                                              Read,
-                                              ReadyToWrite,
-                                              Write,
-                                              GenerateId>,
-                                          Value,
-                                          duplex_signal>
+struct lambda_duplex_signal_with_id
+    : signal<
+          lambda_duplex_signal_with_id<
+              Value,
+              HasValue,
+              Read,
+              ReadyToWrite,
+              Write,
+              GenerateId>,
+          Value,
+          signal_capabilities<signal_readable, signal_writable>>
 {
     lambda_duplex_signal_with_id(
         HasValue has_value,
@@ -6879,6 +7603,7 @@ struct lambda_duplex_signal_with_id : signal<
         GenerateId generate_id)
         : has_value_(has_value),
           read_(read),
+          value_(decltype(read())()),
           ready_to_write_(ready_to_write),
           write_(write),
           generate_id_(generate_id)
@@ -6907,9 +7632,9 @@ struct lambda_duplex_signal_with_id : signal<
         return ready_to_write_();
     }
     void
-    write(Value const& value) const
+    write(Value value) const
     {
-        write_(value);
+        write_(std::move(value));
     }
 
  private:
@@ -6973,151 +7698,151 @@ namespace alia {
 // scale(n, factor) creates a new signal that presents a scaled view of :n,
 // where :n and :factor are both numeric signals.
 template<class N, class Factor>
-struct scaled_signal : regular_signal<
-                           scaled_signal<N, Factor>,
-                           typename N::value_type,
-                           typename N::direction_tag>
+struct scaled_signal : lazy_signal_wrapper<scaled_signal<N, Factor>, N>
 {
-    scaled_signal(N n, Factor scale_factor) : n_(n), scale_factor_(scale_factor)
+    scaled_signal(N n, Factor scale_factor)
+        : scaled_signal::lazy_signal_wrapper(std::move(n)),
+          scale_factor_(std::move(scale_factor))
     {
     }
     bool
     has_value() const
     {
-        return n_.has_value() && scale_factor_.has_value();
+        return this->wrapped_.has_value() && scale_factor_.has_value();
     }
-    typename N::value_type const&
-    read() const
+    typename N::value_type
+    movable_value() const
     {
-        return lazy_reader_.read(
-            [&] { return n_.read() * scale_factor_.read(); });
+        return this->wrapped_.read() * scale_factor_.read();
+    }
+    id_interface const&
+    value_id() const
+    {
+        id_ = combine_ids(
+            ref(this->wrapped_.value_id()), ref(scale_factor_.value_id()));
+        return id_;
     }
     bool
     ready_to_write() const
     {
-        return n_.ready_to_write() && scale_factor_.has_value();
+        return this->wrapped_.ready_to_write() && scale_factor_.has_value();
     }
     void
-    write(typename N::value_type const& value) const
+    write(typename N::value_type value) const
     {
-        n_.write(value / scale_factor_.read());
+        this->wrapped_.write(value / forward_signal(scale_factor_));
     }
 
  private:
-    N n_;
     Factor scale_factor_;
-    lazy_reader<typename N::value_type> lazy_reader_;
+    mutable id_pair<id_ref, id_ref> id_;
 };
 template<class N, class Factor>
 scaled_signal<N, Factor>
 make_scaled_signal(N n, Factor scale_factor)
 {
-    return scaled_signal<N, Factor>(n, scale_factor);
+    return scaled_signal<N, Factor>(std::move(n), std::move(scale_factor));
 }
 template<class N, class Factor>
 auto
 scale(N n, Factor scale_factor)
 {
-    return make_scaled_signal(n, signalize(scale_factor));
+    return make_scaled_signal(std::move(n), signalize(std::move(scale_factor)));
 }
 
 // offset(n, offset) presents an offset view of :n.
 template<class N, class Offset>
-struct offset_signal : regular_signal<
-                           offset_signal<N, Offset>,
-                           typename N::value_type,
-                           typename N::direction_tag>
+struct offset_signal : lazy_signal_wrapper<offset_signal<N, Offset>, N>
 {
-    offset_signal(N n, Offset offset) : n_(n), offset_(offset)
+    offset_signal(N n, Offset offset)
+        : offset_signal::lazy_signal_wrapper(std::move(n)),
+          offset_(std::move(offset))
     {
     }
     bool
     has_value() const
     {
-        return n_.has_value() && offset_.has_value();
+        return this->wrapped_.has_value() && offset_.has_value();
     }
-    typename N::value_type const&
-    read() const
+    typename N::value_type
+    movable_value() const
     {
-        return lazy_reader_.read([&] { return n_.read() + offset_.read(); });
+        return this->wrapped_.read() + offset_.read();
+    }
+    id_interface const&
+    value_id() const
+    {
+        id_ = combine_ids(
+            ref(this->wrapped_.value_id()), ref(offset_.value_id()));
+        return id_;
     }
     bool
     ready_to_write() const
     {
-        return n_.ready_to_write() && offset_.has_value();
+        return this->wrapped_.ready_to_write() && offset_.has_value();
     }
     void
-    write(typename N::value_type const& value) const
+    write(typename N::value_type value) const
     {
-        n_.write(value - offset_.read());
+        this->wrapped_.write(value - forward_signal(offset_));
     }
 
  private:
-    N n_;
     Offset offset_;
-    lazy_reader<typename N::value_type> lazy_reader_;
+    mutable id_pair<id_ref, id_ref> id_;
 };
 template<class N, class Offset>
 offset_signal<N, Offset>
 make_offset_signal(N n, Offset offset)
 {
-    return offset_signal<N, Offset>(n, offset);
+    return offset_signal<N, Offset>(std::move(n), std::move(offset));
 }
 template<class N, class Offset>
 auto
 offset(N n, Offset offset)
 {
-    return make_offset_signal(n, signalize(offset));
+    return make_offset_signal(std::move(n), signalize(std::move(offset)));
 }
 
 // round_signal_writes(n, step) yields a wrapper which rounds any writes to
 // :n so that values are always a multiple of :step.
 template<class N, class Step>
-struct rounding_signal_wrapper : regular_signal<
-                                     rounding_signal_wrapper<N, Step>,
-                                     typename N::value_type,
-                                     typename N::direction_tag>
+struct rounding_signal_wrapper
+    : signal_wrapper<rounding_signal_wrapper<N, Step>, N>
 {
-    rounding_signal_wrapper(N n, Step step) : n_(n), step_(step)
+    rounding_signal_wrapper(N n, Step step)
+        : rounding_signal_wrapper::signal_wrapper(std::move(n)),
+          step_(std::move(step))
     {
-    }
-    bool
-    has_value() const
-    {
-        return n_.has_value();
-    }
-    typename N::value_type const&
-    read() const
-    {
-        return n_.read();
     }
     bool
     ready_to_write() const
     {
-        return n_.ready_to_write() && step_.has_value();
+        return this->wrapped_.ready_to_write() && step_.has_value();
     }
     void
-    write(typename N::value_type const& value) const
+    write(typename N::value_type value) const
     {
         typename N::value_type step = step_.read();
-        n_.write(std::floor(value / step + typename N::value_type(0.5)) * step);
+        this->wrapped_.write(
+            std::floor(value / step + typename N::value_type(0.5)) * step);
     }
 
  private:
-    N n_;
     Step step_;
 };
 template<class N, class Step>
 rounding_signal_wrapper<N, Step>
 make_rounding_signal_wrapper(N n, Step step)
 {
-    return rounding_signal_wrapper<N, Step>(n, step);
+    return rounding_signal_wrapper<N, Step>(std::move(n), std::move(step));
 }
 template<class N, class Step>
 auto
 round_signal_writes(N n, Step step)
 {
-    return make_rounding_signal_wrapper(n, signalize(step));
+    return make_rounding_signal_wrapper(
+        std::move(n), signalize(std::move(step)));
 }
 
 } // namespace alia
@@ -7219,8 +7944,9 @@ struct state_storage
     component_container_ptr container_;
 };
 
-template<class Value, class Direction>
-struct state_signal : signal<state_signal<Value, Direction>, Value, Direction>
+template<class Value, class Capabilities>
+struct state_signal
+    : signal<state_signal<Value, Capabilities>, Value, Capabilities>
 {
     explicit state_signal(state_storage<Value>* data) : data_(data)
     {
@@ -7252,9 +7978,16 @@ struct state_signal : signal<state_signal<Value, Direction>, Value, Direction>
     }
 
     void
-    write(Value const& value) const
+    write(Value value) const
     {
-        data_->set(value);
+        data_->set(std::move(value));
+    }
+
+    Value
+    movable_value() const
+    {
+        Value movable = std::move(data_->untracked_nonconst_ref());
+        return movable;
     }
 
  private:
@@ -7263,10 +7996,10 @@ struct state_signal : signal<state_signal<Value, Direction>, Value, Direction>
 };
 
 template<class Value>
-state_signal<Value, duplex_signal>
+state_signal<Value, copyable_duplex_signal>
 make_state_signal(state_storage<Value>& data)
 {
-    return state_signal<Value, duplex_signal>(&data);
+    return state_signal<Value, copyable_duplex_signal>(&data);
 }
 
 // get_state(ctx, initial_value) returns a signal carrying some persistent local
@@ -7380,7 +8113,7 @@ ALIA_DECLARE_STRING_CONVERSIONS(float)
 ALIA_DECLARE_STRING_CONVERSIONS(double)
 ALIA_DECLARE_STRING_CONVERSIONS(std::string)
 
-// as_text(ctx, x) creates a text-based interface to the accessor x.
+// as_text(ctx, x) creates a text-based interface to the signal x.
 template<class Readable>
 void
 update_text_conversion(keyed_data<std::string>* data, Readable x)
@@ -7441,14 +8174,17 @@ update_duplex_text(duplex_text_data<Value>* data, Readable x)
     }
 }
 template<class Wrapped>
-struct duplex_text_signal : signal<
+struct duplex_text_signal : casting_signal_wrapper<
                                 duplex_text_signal<Wrapped>,
+                                Wrapped,
                                 std::string,
-                                typename Wrapped::direction_tag>
+                                typename signal_capabilities_intersection<
+                                    copyable_duplex_signal,
+                                    typename Wrapped::capabilities>::type>
 {
     duplex_text_signal(
         Wrapped wrapped, duplex_text_data<typename Wrapped::value_type>* data)
-        : wrapped_(wrapped), data_(data)
+        : duplex_text_signal::casting_signal_wrapper(wrapped), data_(data)
     {
     }
     bool
@@ -7461,30 +8197,29 @@ struct duplex_text_signal : signal<
     {
         return data_->output_text;
     }
+    std::string
+    movable_value() const
+    {
+        return this->read();
+    }
     id_interface const&
     value_id() const
     {
         id_ = make_id(data_->output_version);
         return id_;
     }
-    bool
-    ready_to_write() const
-    {
-        return wrapped_.ready_to_write();
-    }
     void
-    write(std::string const& s) const
+    write(std::string s) const
     {
         typename Wrapped::value_type value;
         from_string(&value, s);
         data_->input_value = value;
-        wrapped_.write(value);
+        this->wrapped_.write(std::move(value));
         data_->output_text = s;
         ++data_->output_version;
     }
 
  private:
-    Wrapped wrapped_;
     duplex_text_data<typename Wrapped::value_type>* data_;
     mutable simple_id<counter_type> id_;
 };
@@ -7496,6 +8231,74 @@ as_duplex_text(context ctx, Signal x)
     get_cached_data(ctx, &data);
     update_duplex_text(data, x);
     return duplex_text_signal<Signal>(x, data);
+}
+
+} // namespace alia
+
+
+
+namespace alia {
+
+struct signal_validation_data
+{
+    captured_id value_id;
+    std::exception_ptr error;
+};
+
+template<class Wrapped>
+struct validated_signal : signal_wrapper<validated_signal<Wrapped>, Wrapped>
+{
+    validated_signal()
+    {
+    }
+    validated_signal(signal_validation_data* data, Wrapped wrapped)
+        : validated_signal::signal_wrapper(wrapped), data_(data)
+    {
+    }
+    bool
+    has_value() const
+    {
+        return !data_->error && this->wrapped_.has_value();
+    }
+    bool
+    invalidate(std::exception_ptr error) const
+    {
+        data_->error = error;
+        this->wrapped_.invalidate(error);
+        return true;
+    }
+    bool
+    is_invalidated() const
+    {
+        return data_->error || this->wrapped_.is_invalidated();
+    }
+
+ private:
+    signal_validation_data* data_;
+};
+
+template<class Signal>
+auto
+enforce_validity(
+    dataless_context ctx, Signal signal, signal_validation_data& data)
+{
+    on_refresh(ctx, [&](auto) {
+        if (!signal.is_invalidated()
+            && !data.value_id.matches(signal.value_id()))
+        {
+            data.error = nullptr;
+            data.value_id.capture(signal.value_id());
+        }
+    });
+    return validated_signal<Signal>(&data, signal);
+}
+
+template<class Signal>
+auto
+enforce_validity(context ctx, Signal signal)
+{
+    auto& data = get_cached_data<signal_validation_data>(ctx);
+    return enforce_validity(ctx, signal, data);
 }
 
 } // namespace alia
@@ -7925,17 +8728,15 @@ struct deflickering_data
 };
 
 template<class Wrapped>
-struct deflickering_signal : signal<
-                                 deflickering_signal<Wrapped>,
-                                 typename Wrapped::value_type,
-                                 typename Wrapped::direction_tag>
+struct deflickering_signal
+    : signal_wrapper<deflickering_signal<Wrapped>, Wrapped>
 {
     deflickering_signal()
     {
     }
     deflickering_signal(
         Wrapped wrapped, captured_value<typename Wrapped::value_type>& captured)
-        : wrapped_(wrapped), captured_(captured)
+        : deflickering_signal::signal_wrapper(wrapped), captured_(captured)
     {
     }
     bool
@@ -7953,19 +8754,8 @@ struct deflickering_signal : signal<
     {
         return captured_.id.is_initialized() ? captured_.id.get() : null_id;
     }
-    bool
-    ready_to_write() const
-    {
-        return wrapped_.ready_to_write();
-    }
-    void
-    write(typename Wrapped::value_type const& value) const
-    {
-        wrapped_.write(value);
-    }
 
  private:
-    Wrapped wrapped_;
     captured_value<typename Wrapped::value_type>& captured_;
 };
 
@@ -8154,31 +8944,28 @@ smooth_raw(
 // values.
 
 template<class Wrapped>
-struct smoothed_signal : regular_signal<
+struct smoothed_signal : signal_wrapper<
                              smoothed_signal<Wrapped>,
+                             Wrapped,
                              typename Wrapped::value_type,
                              read_only_signal>
 {
     smoothed_signal(
         Wrapped wrapped, typename Wrapped::value_type smoothed_value)
-        : wrapped_(wrapped), smoothed_value_(smoothed_value)
+        : smoothed_signal::signal_wrapper(wrapped),
+          smoothed_value_(smoothed_value)
     {
     }
     id_interface const&
     value_id() const
     {
-        if (wrapped_.has_value())
+        if (this->wrapped_.has_value())
         {
             id_ = make_id(smoothed_value_);
             return id_;
         }
         else
             return null_id;
-    }
-    bool
-    has_value() const
-    {
-        return wrapped_.has_value();
     }
     typename Wrapped::value_type const&
     read() const
@@ -8187,7 +8974,6 @@ struct smoothed_signal : regular_signal<
     }
 
  private:
-    Wrapped wrapped_;
     typename Wrapped::value_type smoothed_value_;
     mutable simple_id<typename Wrapped::value_type> id_;
 };
@@ -8310,7 +9096,7 @@ clone_into(id_interface*& storage, id_interface const* id)
 }
 
 void
-clone_into(std::shared_ptr<id_interface>& storage, id_interface const* id)
+clone_into(std::unique_ptr<id_interface>& storage, id_interface const* id)
 {
     if (!id)
     {
@@ -8356,11 +9142,53 @@ make_context(
     data_traversal& data,
     timing_subsystem& timing)
 {
+    storage->content_id = &unit_id;
     return make_context(impl::make_empty_structural_collection(storage))
         .add<system_tag>(sys)
         .add<event_traversal_tag>(event)
         .add<timing_tag>(timing)
         .add<data_traversal_tag>(data);
+}
+
+struct scoped_context_content_id_data
+{
+    captured_id id_from_above;
+    captured_id id_from_here;
+    unsigned id_to_present = 0;
+};
+
+void
+scoped_context_content_id::begin(context ctx, id_interface const& id)
+{
+    ctx_.reset(ctx);
+    parent_id_ = ctx.contents_.storage->content_id;
+
+    auto& data = get_cached_data<scoped_context_content_id_data>(ctx);
+
+    if (!data.id_from_above.matches(*parent_id_))
+    {
+        ++data.id_to_present;
+        data.id_from_above.capture(*parent_id_);
+    }
+
+    if (!data.id_from_here.matches(id))
+    {
+        ++data.id_to_present;
+        data.id_from_here.capture(id);
+    }
+
+    this_id_ = make_id(data.id_to_present);
+    ctx.contents_.storage->content_id = &this_id_;
+}
+
+void
+scoped_context_content_id::end()
+{
+    if (ctx_)
+    {
+        ctx_->contents_.storage->content_id = parent_id_;
+        ctx_.reset();
+    }
 }
 
 } // namespace alia
@@ -8632,22 +9460,22 @@ delete_named_block_ref_list(named_block_ref_node* head)
 static void
 clear_data_node_caches(data_node* node)
 {
-	if (node)
-	{
-		clear_data_node_caches(node->next);
-		node->clear_cache();
-	}
+    if (node)
+    {
+        clear_data_node_caches(node->next);
+        node->clear_cache();
+    }
 }
 
 // Same with named_block_ref_nodes.
 static void
 deactivate_ref_nodes(named_block_ref_node* node)
 {
-	if (node)
-	{
-		deactivate_ref_nodes(node->next);
-		deactivate(*node);
-	}
+    if (node)
+    {
+        deactivate_ref_nodes(node->next);
+        deactivate(*node);
+    }
 }
 
 void
@@ -8655,8 +9483,8 @@ data_block::clear_cache()
 {
     if (!this->cache_clear)
     {
-		clear_data_node_caches(this->nodes);
-		deactivate_ref_nodes(this->named_blocks);
+        clear_data_node_caches(this->nodes);
+        deactivate_ref_nodes(this->named_blocks);
         this->cache_clear = true;
     }
 }

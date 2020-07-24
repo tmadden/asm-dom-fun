@@ -6,6 +6,7 @@ message(STATUS "Checking for asm-dom: Please wait")
 include(FetchContent)
 FetchContent_Declare(asm-dom
   GIT_REPOSITORY https://github.com/mbasso/asm-dom
+  GIT_TAG master
 )
 
 FetchContent_GetProperties(asm-dom)

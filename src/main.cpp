@@ -2,8 +2,6 @@
 // Use of this source code is governed by the MIT license that can be found in
 // the LICENSE file.
 
-#include "asm-dom.hpp"
-
 #include <emscripten/emscripten.h>
 #include <emscripten/fetch.h>
 #include <emscripten/val.h>
