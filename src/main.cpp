@@ -159,72 +159,84 @@ do_content_ui(dom::context ctx)
     // if (timer.is_triggered())
     //     abort_traversal(ctx);
 
+    // auto color = get_state(ctx, value(rgb8(0, 0, 0)));
+    // {
+    //     scoped_div buttons(ctx, value("button-container"));
+    //     do_button(ctx, "black"_a, color <<= value(rgb8(50, 50, 55)));
+    //     do_button(ctx, "white"_a, color <<= value(rgb8(230, 230, 255)));
+    // }
+    // do_colored_box(ctx, smooth(ctx, color));
+
     auto color = get_state(ctx, value(rgb8(0, 0, 0)));
     {
-        scoped_div buttons(ctx, value("button-container"));
+        // scoped_div buttons(ctx, value("button-container"));
         do_button(ctx, "black"_a, color <<= value(rgb8(50, 50, 55)));
         do_button(ctx, "white"_a, color <<= value(rgb8(230, 230, 255)));
     }
-    do_colored_box(ctx, smooth(ctx, color));
+    // do_colored_box(ctx, smooth(ctx, color));
 
-    auto n = get_state(ctx, empty<int>());
-    element(ctx, "div").attr("class", "form-group").children([&](auto ctx) {
-        do_input(ctx, n);
-    });
+    // auto n = get_state(ctx, empty<int>());
+    // element(ctx, "div").attr("class", "form-group").children([&](auto ctx) {
+    //     do_input(ctx, n);
+    // });
 
-    do_cached_content(ctx, n.value_id(), [&](auto ctx) {
-        std::cout << "Refreshing cached content..." << std::endl;
+    // element(ctx, "h4")
+    //     .attr("class", "header-title")
+    //     .text(conditional(state, "On!", "Off!"));
 
-        ALIA_IF(n > 12)
-        {
-            element(ctx, "h4").attr("class", "header-title").text("HIGH!");
-        }
-        ALIA_END
+    // do_cached_content(ctx, n.value_id(), [&](auto ctx) {
+    //     std::cout << "Refreshing cached content..." << std::endl;
 
-        element(ctx, "h4")
-            .attr("class", "header-title")
-            .text(conditional(n > 2, "On!", "Off!"));
-    });
+    //     ALIA_IF(n > 12)
+    //     {
+    //         element(ctx, "h4").attr("class", "header-title").text("HIGH!");
+    //     }
+    //     ALIA_END
 
-    element(ctx, "h4")
-        .attr("class", "header-title")
-        .text(conditional(state, "On!", "Off!"));
+    //     element(ctx, "h4")
+    //         .attr("class", "header-title")
+    //         .text(conditional(n > 2, "On!", "Off!"));
+    // });
 
-    auto storage_value = get_state(ctx, "");
-    element(ctx, "div").attr("class", "form-group").children([&](auto ctx) {
-        do_checkbox(ctx, state, "Abacadaba");
+    // element(ctx, "h4")
+    //     .attr("class", "header-title")
+    //     .text(conditional(state, "On!", "Off!"));
 
-        element(ctx, "div")
-            .attr("class", "input-group")
-            .children([&](auto ctx) {
-                do_input(ctx, storage_value);
+    // auto storage_value = get_state(ctx, "");
+    // element(ctx, "div").attr("class", "form-group").children([&](auto ctx) {
+    //     do_checkbox(ctx, state, "Abacadaba");
 
-                element(ctx, "div")
-                    .attr("class", "input-group-append")
-                    .children([&](auto ctx) {
-                        do_button(ctx, "Store!", lambda_action([&] {
-                                      emscripten::val::global("localStorage")
-                                          .call<void>(
-                                              "setItem",
-                                              emscripten::val("my_key"),
-                                              emscripten::val(
-                                                  read_signal(storage_value)));
-                                  }));
-                        do_button(
-                            ctx, "Retrieve!", lambda_action([&] {
-                                write_signal(
-                                    storage_value,
-                                    emscripten::val::global("localStorage")
-                                        .call<std::string>(
-                                            "getItem",
-                                            emscripten::val("my_key")));
-                            }));
-                    });
-            });
-    });
+    //     element(ctx, "div")
+    //         .attr("class", "input-group")
+    //         .children([&](auto ctx) {
+    //             do_input(ctx, storage_value);
 
-    for (int i = 0; i != 10; ++i)
-        element(ctx, "h4").attr("class", "header-title").text("Fun!");
+    //             element(ctx, "div")
+    //                 .attr("class", "input-group-append")
+    //                 .children([&](auto ctx) {
+    //                     do_button(ctx, "Store!", lambda_action([&] {
+    //                                   emscripten::val::global("localStorage")
+    //                                       .call<void>(
+    //                                           "setItem",
+    //                                           emscripten::val("my_key"),
+    //                                           emscripten::val(
+    //                                               read_signal(storage_value)));
+    //                               }));
+    //                     do_button(
+    //                         ctx, "Retrieve!", lambda_action([&] {
+    //                             write_signal(
+    //                                 storage_value,
+    //                                 emscripten::val::global("localStorage")
+    //                                     .call<std::string>(
+    //                                         "getItem",
+    //                                         emscripten::val("my_key")));
+    //                         }));
+    //                 });
+    //         });
+    // });
+
+    // for (int i = 0; i != 10; ++i)
+    //     element(ctx, "h4").attr("class", "header-title").text("Fun!");
 
     // schedule_animation_refresh(ctx);
 }

@@ -1,569 +1,66 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 
 <head>
     <meta charset="utf-8" />
-    <title>Hyper - Responsive Bootstrap 4 Admin Dashboard</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta content="A fully featured admin theme which can be used to build CRM, CMS, etc." name="description" />
-    <meta content="Coderthemes" name="author" />
-    <!-- App favicon -->
-    <link rel="shortcut icon" href="assets/images/favicon.ico">
-
-    <!-- third party css -->
-    <link href="assets/css/vendor/jquery-jvectormap-1.2.2.css" rel="stylesheet" type="text/css" />
-    <!-- third party css end -->
-
-    <!-- App css -->
-    <link href="assets/css/icons.min.css" rel="stylesheet" type="text/css" />
-    <link href="assets/css/app.min.css" rel="stylesheet" type="text/css" id="light-style" />
-    <link href="assets/css/app-dark.min.css" rel="stylesheet" type="text/css" id="dark-style" />
-
-    <link href="style.css" rel="stylesheet" type="text/css" />
-
-
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Tabler Static</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,300i,400,400i,500,500i,600,600i,700,700i&amp;subset=latin-ext">
+    <!-- CSS files -->
+    <link href="https://preview-dev.tabler.io/dist/css/tabler.min.css?1588343458" rel="stylesheet" />
+    <link href="https://preview-dev.tabler.io/dist/css/tabler-buttons.min.css?1588343458" rel="stylesheet" />
+    <link href="https://preview-dev.tabler.io/dist/css/demo.min.css?1588343458" rel="stylesheet" />
 </head>
 
-<body class="loading"
-    data-layout-config='{"leftSideBarTheme":"dark","layoutBoxed":false, "leftSidebarCondensed":false, "leftSidebarScrollable":false,"darkMode":false, "showRightSidebarOnStart": true}'>
-    <!-- Begin page -->
-    <div class="wrapper">
-        <!-- ========== Left Sidebar Start ========== -->
-        <div class="left-side-menu">
-
-            <!-- LOGO -->
-            <a href="index.html" class="logo text-center logo-light">
-                <span class="logo-lg">
-                    <img src="assets/images/logo.png" alt="" height="16">
-                </span>
-                <span class="logo-sm">
-                    <img src="assets/images/logo_sm.png" alt="" height="16">
-                </span>
-            </a>
-
-            <!-- LOGO -->
-            <a href="index.html" class="logo text-center logo-dark">
-                <span class="logo-lg">
-                    <img src="assets/images/logo-dark.png" alt="" height="16">
-                </span>
-                <span class="logo-sm">
-                    <img src="assets/images/logo_sm_dark.png" alt="" height="16">
-                </span>
-            </a>
-
-            <div class="h-100" id="left-side-menu-container" data-simplebar>
-
-                <!--- Sidemenu -->
-                <ul class="metismenu side-nav">
-
-                    <li class="side-nav-title side-nav-item">Navigation</li>
-
-                    <li class="side-nav-item">
-                        <a href="javascript: void(0);" class="side-nav-link">
-                            <i class="uil-home-alt"></i>
-                            <span class="badge badge-success float-right">4</span>
-                            <span> Dashboards </span>
-                        </a>
-                        <ul class="side-nav-second-level" aria-expanded="false">
-                            <div id=nav-root></div>
-                            <li>
-                                <a href="dashboard-analytics.html">Analytics</a>
-                            </li>
-                            <li>
-                                <a href="dashboard-crm.html">CRM</a>
-                            </li>
-                            <li>
-                                <a href="index.html">Ecommerce</a>
-                            </li>
-                            <li>
-                                <a href="dashboard-projects.html">Projects</a>
-                            </li>
-                        </ul>
-                    </li>
-
-                    <li class="side-nav-title side-nav-item">Apps</li>
-
-                    <li class="side-nav-item">
-                        <a href="apps-calendar.html" class="side-nav-link">
-                            <i class="uil-calender"></i>
-                            <span> Calendar </span>
-                        </a>
-                    </li>
-
-                    <li class="side-nav-item">
-                        <a href="apps-chat.html" class="side-nav-link">
-                            <i class="uil-comments-alt"></i>
-                            <span> Chat </span>
-                        </a>
-                    </li>
-
-                    <li class="side-nav-item">
-                        <a href="javascript: void(0);" class="side-nav-link">
-                            <i class="uil-store"></i>
-                            <span> Ecommerce </span>
-                            <span class="menu-arrow"></span>
-                        </a>
-                        <ul class="side-nav-second-level" aria-expanded="false">
-                            <li>
-                                <a href="apps-ecommerce-products.html">Products</a>
-                            </li>
-                            <li>
-                                <a href="apps-ecommerce-products-details.html">Products Details</a>
-                            </li>
-                            <li>
-                                <a href="apps-ecommerce-orders.html">Orders</a>
-                            </li>
-                            <li>
-                                <a href="apps-ecommerce-orders-details.html">Order Details</a>
-                            </li>
-                            <li>
-                                <a href="apps-ecommerce-customers.html">Customers</a>
-                            </li>
-                            <li>
-                                <a href="apps-ecommerce-shopping-cart.html">Shopping Cart</a>
-                            </li>
-                            <li>
-                                <a href="apps-ecommerce-checkout.html">Checkout</a>
-                            </li>
-                            <li>
-                                <a href="apps-ecommerce-sellers.html">Sellers</a>
-                            </li>
-                        </ul>
-                    </li>
-
-                </ul>
-
-                <div class="clearfix"></div>
-
+<body class="antialiased border-top-wide border-primary d-flex flex-column">
+    <div class="flex-fill d-flex flex-column justify-content-center">
+        <div class="container-tight py-6">
+            <div class="text-center mb-4">
+                <img src="https://raw.githubusercontent.com/tabler/tabler/dev/demo/static/logo.svg" height="36" alt="">
             </div>
-            <!-- Sidebar -left -->
-
-        </div>
-        <!-- Left Sidebar End -->
-
-        <!-- ============================================================== -->
-        <!-- Start Page Content here -->
-        <!-- ============================================================== -->
-
-        <div class="content-page">
-            <div class="content">
-                <!-- Topbar Start -->
-                <div class="navbar-custom">
-                    <ul class="list-unstyled topbar-right-menu float-right mb-0">
-                        <li class="notification-list">
-                            <a class="nav-link right-bar-toggle" href="javascript: void(0);">
-                                <i class="dripicons-gear noti-icon"></i>
-                            </a>
-                        </li>
-
-                        <li class="dropdown notification-list topbar-dropdown">
-                            <a class="nav-link dropdown-toggle arrow-none" data-toggle="dropdown" href="#" role="button"
-                                aria-haspopup="false" aria-expanded="false">
-                                <img src="assets/images/flags/us.jpg" alt="user-image" class="mr-0 mr-sm-1" height="12">
-                                <span class="align-middle d-none d-sm-inline-block">English</span> <i
-                                    class="mdi mdi-chevron-down d-none d-sm-inline-block"></i>
-                            </a>
-                            <div class="dropdown-menu dropdown-menu-right dropdown-menu-animated topbar-dropdown-menu">
-
-                                <!-- item-->
-                                <a href="javascript:void(0);" class="dropdown-item notify-item">
-                                    <img src="assets/images/flags/germany.jpg" alt="user-image" class="mr-1"
-                                        height="12"> <span class="align-middle">German</span>
-                                </a>
-
-                                <!-- item-->
-                                <a href="javascript:void(0);" class="dropdown-item notify-item">
-                                    <img src="assets/images/flags/italy.jpg" alt="user-image" class="mr-1" height="12">
-                                    <span class="align-middle">Italian</span>
-                                </a>
-
-                                <!-- item-->
-                                <a href="javascript:void(0);" class="dropdown-item notify-item">
-                                    <img src="assets/images/flags/spain.jpg" alt="user-image" class="mr-1" height="12">
-                                    <span class="align-middle">Spanish</span>
-                                </a>
-
-                                <!-- item-->
-                                <a href="javascript:void(0);" class="dropdown-item notify-item">
-                                    <img src="assets/images/flags/russia.jpg" alt="user-image" class="mr-1" height="12">
-                                    <span class="align-middle">Russian</span>
-                                </a>
-
-                            </div>
-                        </li>
-
-                        <li class="dropdown notification-list">
-                            <a class="nav-link dropdown-toggle arrow-none" data-toggle="dropdown" href="#" role="button"
-                                aria-haspopup="false" aria-expanded="false">
-                                <i class="dripicons-bell noti-icon"></i>
-                                <span class="noti-icon-badge"></span>
-                            </a>
-                            <div class="dropdown-menu dropdown-menu-right dropdown-menu-animated dropdown-lg">
-
-                                <!-- item-->
-                                <div class="dropdown-item noti-title">
-                                    <h5 class="m-0">
-                                        <span class="float-right">
-                                            <a href="javascript: void(0);" class="text-dark">
-                                                <small>Clear All</small>
-                                            </a>
-                                        </span>Notification
-                                    </h5>
-                                </div>
-
-                                <div style="max-height: 230px;" data-simplebar>
-                                    <!-- item-->
-                                    <a href="javascript:void(0);" class="dropdown-item notify-item">
-                                        <div class="notify-icon bg-primary">
-                                            <i class="mdi mdi-comment-account-outline"></i>
-                                        </div>
-                                        <p class="notify-details">Caleb Flakelar commented on Admin
-                                            <small class="text-muted">1 min ago</small>
-                                        </p>
-                                    </a>
-
-                                    <!-- item-->
-                                    <a href="javascript:void(0);" class="dropdown-item notify-item">
-                                        <div class="notify-icon bg-info">
-                                            <i class="mdi mdi-account-plus"></i>
-                                        </div>
-                                        <p class="notify-details">New user registered.
-                                            <small class="text-muted">5 hours ago</small>
-                                        </p>
-                                    </a>
-
-                                    <!-- item-->
-                                    <a href="javascript:void(0);" class="dropdown-item notify-item">
-                                        <div class="notify-icon">
-                                            <img src="assets/images/users/avatar-2.jpg" class="img-fluid rounded-circle"
-                                                alt="" /> </div>
-                                        <p class="notify-details">Cristina Pride</p>
-                                        <p class="text-muted mb-0 user-msg">
-                                            <small>Hi, How are you? What about our next meeting</small>
-                                        </p>
-                                    </a>
-
-                                    <!-- item-->
-                                    <a href="javascript:void(0);" class="dropdown-item notify-item">
-                                        <div class="notify-icon bg-primary">
-                                            <i class="mdi mdi-comment-account-outline"></i>
-                                        </div>
-                                        <p class="notify-details">Caleb Flakelar commented on Admin
-                                            <small class="text-muted">4 days ago</small>
-                                        </p>
-                                    </a>
-
-                                    <!-- item-->
-                                    <a href="javascript:void(0);" class="dropdown-item notify-item">
-                                        <div class="notify-icon">
-                                            <img src="assets/images/users/avatar-4.jpg" class="img-fluid rounded-circle"
-                                                alt="" /> </div>
-                                        <p class="notify-details">Karen Robinson</p>
-                                        <p class="text-muted mb-0 user-msg">
-                                            <small>Wow ! this admin looks good and awesome design</small>
-                                        </p>
-                                    </a>
-
-                                    <!-- item-->
-                                    <a href="javascript:void(0);" class="dropdown-item notify-item">
-                                        <div class="notify-icon bg-info">
-                                            <i class="mdi mdi-heart"></i>
-                                        </div>
-                                        <p class="notify-details">Carlos Crouch liked
-                                            <b>Admin</b>
-                                            <small class="text-muted">13 days ago</small>
-                                        </p>
-                                    </a>
-                                </div>
-
-                                <!-- All-->
-                                <a href="javascript:void(0);"
-                                    class="dropdown-item text-center text-primary notify-item notify-all">
-                                    View All
-                                </a>
-
-                            </div>
-                        </li>
-
-                        <li class="dropdown notification-list">
-                            <a class="nav-link dropdown-toggle nav-user arrow-none mr-0" data-toggle="dropdown" href="#"
-                                role="button" aria-haspopup="false" aria-expanded="false">
-                                <span class="account-user-avatar">
-                                    <img src="assets/images/users/avatar-1.jpg" alt="user-image" class="rounded-circle">
-                                </span>
-                                <span>
-                                    <span class="account-user-name">Dominic Keller</span>
-                                    <span class="account-position">Founder</span>
-                                </span>
-                            </a>
-                            <div
-                                class="dropdown-menu dropdown-menu-right dropdown-menu-animated topbar-dropdown-menu profile-dropdown">
-                                <!-- item-->
-                                <div class=" dropdown-header noti-title">
-                                    <h6 class="text-overflow m-0">Welcome !</h6>
-                                </div>
-
-                                <!-- item-->
-                                <a href="javascript:void(0);" class="dropdown-item notify-item">
-                                    <i class="mdi mdi-account-circle mr-1"></i>
-                                    <span>My Account</span>
-                                </a>
-
-                                <!-- item-->
-                                <a href="javascript:void(0);" class="dropdown-item notify-item">
-                                    <i class="mdi mdi-account-edit mr-1"></i>
-                                    <span>Settings</span>
-                                </a>
-
-                                <!-- item-->
-                                <a href="javascript:void(0);" class="dropdown-item notify-item">
-                                    <i class="mdi mdi-lifebuoy mr-1"></i>
-                                    <span>Support</span>
-                                </a>
-
-                                <!-- item-->
-                                <a href="javascript:void(0);" class="dropdown-item notify-item">
-                                    <i class="mdi mdi-lock-outline mr-1"></i>
-                                    <span>Lock Screen</span>
-                                </a>
-
-                                <!-- item-->
-                                <a href="javascript:void(0);" class="dropdown-item notify-item">
-                                    <i class="mdi mdi-logout mr-1"></i>
-                                    <span>Logout</span>
-                                </a>
-
-                            </div>
-                        </li>
-
-                    </ul>
-                    <button class="button-menu-mobile open-left disable-btn">
-                        <i class="mdi mdi-menu"></i>
-                    </button>
-                    <div class="app-search">
-                        <form>
-                            <div class="input-group">
-                                <input type="text" class="form-control" placeholder="Search...">
-                                <span class="mdi mdi-magnify"></span>
-                                <div class="input-group-append">
-                                    <button class="btn btn-primary" type="submit">Search</button>
-                                </div>
-                            </div>
-                        </form>
+            <form class="card card-md" action="." method="get">
+                <div class="card-body">
+                    <h2 class="mb-5 text-center">Login to your account</h2>
+                    <div class="mb-3">
+                        <label class="form-label">Email address</label>
+                        <input type="email" class="form-control" placeholder="Enter email" autocomplete="off">
                     </div>
-                </div>
-                <!-- end Topbar -->
-
-                <!-- Start Content-->
-                <div class="container-fluid">
-
-                    <!-- start page title -->
-                    <div class="row">
-                        <div class="col-12">
-                            <div class="page-title-box">
-                                <div class="page-title-right">
-                                    <form class="form-inline">
-                                        <div class="form-group">
-                                            <div class="input-group">
-                                                <input type="text" class="form-control form-control-light"
-                                                    id="dash-daterange">
-                                                <div class="input-group-append">
-                                                    <span class="input-group-text bg-primary border-primary text-white">
-                                                        <i class="mdi mdi-calendar-range font-13"></i>
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <a href="javascript: void(0);" class="btn btn-primary ml-2">
-                                            <i class="mdi mdi-autorenew"></i>
-                                        </a>
-                                        <a href="javascript: void(0);" class="btn btn-primary ml-1">
-                                            <i class="mdi mdi-filter-variant"></i>
-                                        </a>
-                                    </form>
-                                </div>
-                                <h4 class="page-title">Dashboard</h4>
-                            </div>
+                    <div class="mb-2">
+                        <label class="form-label">
+                            Password
+                            <span class="form-label-description">
+                                <a href="./forgot-password.html">I forgot password</a>
+                            </span>
+                        </label>
+                        <div class="input-group input-group-flat">
+                            <input type="password" class="form-control" placeholder="Password">
+                            <span class="input-group-text">
+                                <a href="#" class="link-secondary" title="Show password" data-toggle="tooltip"><svg
+                                        xmlns="http://www.w3.org/2000/svg" class="icon" width="24" height="24"
+                                        viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none"
+                                        stroke-linecap="round" stroke-linejoin="round">
+                                        <path stroke="none" d="M0 0h24v24H0z" />
+                                        <circle cx="12" cy="12" r="2" />
+                                        <path d="M2 12l1.5 2a11 11 0 0 0 17 0l1.5 -2" />
+                                        <path d="M2 12l1.5 -2a11 11 0 0 1 17 0l1.5 2" /></svg>
+                                </a>
+                            </span>
                         </div>
                     </div>
-                    <!-- end page title -->
-
-                    <div class="row">
-                        <div class="col-xl-5 col-lg-6">
-
-                            <div class="row">
-                                <div class="col-lg-6">
-                                    <div class="card widget-flat">
-                                        <div class="card-body">
-                                            <div id="content-root"></div>
-                                        </div> <!-- end card-body-->
-                                    </div> <!-- end card-->
-                                </div> <!-- end col-->
-
-                                <div class="col-lg-6">
-                                    <div class="card widget-flat">
-                                        <div class="card-body">
-                                            <div class="float-right">
-                                                <i class="mdi mdi-cart-plus widget-icon"></i>
-                                            </div>
-                                            <h5 class="text-muted font-weight-normal mt-0" title="Number of Orders">
-                                                Orders</h5>
-                                            <h3 class="mt-3 mb-3">5,543</h3>
-                                            <p class="mb-0 text-muted">
-                                                <span class="text-danger mr-2"><i class="mdi mdi-arrow-down-bold"></i>
-                                                    1.08%</span>
-                                                <span class="text-nowrap">Since last month</span>
-                                            </p>
-                                        </div> <!-- end card-body-->
-                                    </div> <!-- end card-->
-                                </div> <!-- end col-->
-                            </div> <!-- end row -->
-
-                        </div> <!-- end col -->
-
-                    </div>
-                    <!-- end row -->
-
-                </div>
-                <!-- container -->
-
-            </div>
-            <!-- content -->
-
-            <!-- Footer Start -->
-            <footer class="footer">
-                <div class="container-fluid">
-                    <div class="row">
-                        <div class="col-md-6">
-                            2018 - 2020 © Hyper - Coderthemes.com
-                        </div>
-                        <div class="col-md-6">
-                            <div class="text-md-right footer-links d-none d-md-block">
-                                <a href="javascript: void(0);">About</a>
-                                <a href="javascript: void(0);">Support</a>
-                                <a href="javascript: void(0);">Contact Us</a>
-                            </div>
-                        </div>
+                    <div id="content-root"></div>
+                    <div class="form-footer">
+                        <button type="submit" class="btn btn-primary btn-block">Sign in</button>
                     </div>
                 </div>
-            </footer>
-            <!-- end Footer -->
-
-        </div>
-
-        <!-- ============================================================== -->
-        <!-- End Page content -->
-        <!-- ============================================================== -->
-
-
-    </div>
-    <!-- END wrapper -->
-
-    <!-- Right Sidebar -->
-    <div class="right-bar">
-
-        <div class="rightbar-title">
-            <a href="javascript:void(0);" class="right-bar-toggle float-right">
-                <i class="dripicons-cross noti-icon"></i>
-            </a>
-            <h5 class="m-0">Settings</h5>
-        </div>
-
-        <div class="rightbar-content h-100" data-simplebar>
-
-            <div class="p-3">
-                <div class="alert alert-warning" role="alert">
-                    <strong>Customize </strong> the overall color scheme, sidebar menu, etc.
-                </div>
-
-                <!-- Settings -->
-                <h5 class="mt-3">Color Scheme</h5>
-                <hr class="mt-1" />
-
-                <div class="custom-control custom-switch mb-1">
-                    <input type="radio" class="custom-control-input" name="color-scheme-mode" value="light"
-                        id="light-mode-check" checked />
-                    <label class="custom-control-label" for="light-mode-check">Light Mode</label>
-                </div>
-
-                <div class="custom-control custom-switch mb-1">
-                    <input type="radio" class="custom-control-input" name="color-scheme-mode" value="dark"
-                        id="dark-mode-check" />
-                    <label class="custom-control-label" for="dark-mode-check">Dark Mode</label>
-                </div>
-
-                <!-- Width -->
-                <h5 class="mt-4">Width</h5>
-                <hr class="mt-1" />
-                <div class="custom-control custom-switch mb-1">
-                    <input type="radio" class="custom-control-input" name="width" value="fluid" id="fluid-check"
-                        checked />
-                    <label class="custom-control-label" for="fluid-check">Fluid</label>
-                </div>
-                <div class="custom-control custom-switch mb-1">
-                    <input type="radio" class="custom-control-input" name="width" value="boxed" id="boxed-check" />
-                    <label class="custom-control-label" for="boxed-check">Boxed</label>
-                </div>
-
-                <!-- Left Sidebar-->
-                <h5 class="mt-4">Left Sidebar</h5>
-                <hr class="mt-1" />
-                <div class="custom-control custom-switch mb-1">
-                    <input type="radio" class="custom-control-input" name="theme" value="default" id="default-check"
-                        checked />
-                    <label class="custom-control-label" for="default-check">Default</label>
-                </div>
-
-                <div class="custom-control custom-switch mb-1">
-                    <input type="radio" class="custom-control-input" name="theme" value="light" id="light-check" />
-                    <label class="custom-control-label" for="light-check">Light</label>
-                </div>
-
-                <div class="custom-control custom-switch mb-3">
-                    <input type="radio" class="custom-control-input" name="theme" value="dark" id="dark-check" />
-                    <label class="custom-control-label" for="dark-check">Dark</label>
-                </div>
-
-                <div class="custom-control custom-switch mb-1">
-                    <input type="radio" class="custom-control-input" name="compact" value="fixed" id="fixed-check"
-                        checked />
-                    <label class="custom-control-label" for="fixed-check">Fixed</label>
-                </div>
-
-                <div class="custom-control custom-switch mb-1">
-                    <input type="radio" class="custom-control-input" name="compact" value="condensed"
-                        id="condensed-check" />
-                    <label class="custom-control-label" for="condensed-check">Condensed</label>
-                </div>
-
-                <div class="custom-control custom-switch mb-1">
-                    <input type="radio" class="custom-control-input" name="compact" value="scrollable"
-                        id="scrollable-check" />
-                    <label class="custom-control-label" for="scrollable-check">Scrollable</label>
-                </div>
-
-                <button class="btn btn-primary btn-block mt-4" id="resetBtn">Reset to Default</button>
-
-                <a href="https://themes.getbootstrap.com/product/hyper-responsive-admin-dashboard-template/"
-                    class="btn btn-danger btn-block mt-3" target="_blank"><i class="mdi mdi-basket mr-1"></i> Purchase
-                    Now</a>
-            </div> <!-- end padding-->
-
+            </form>
         </div>
     </div>
-
-    <div class="rightbar-overlay"></div>
-    <!-- /Right-bar -->
-
-    <!-- bundle -->
-    <script src="assets/js/vendor.min.js"></script>
-    <script src="assets/js/app.min.js"></script>
-
-    <!-- demo app -->
-    <!-- end demo js-->
 
     <script src="asm-dom.js"></script>
     <script src="main.js"></script>
+
 </body>
 
 </html>

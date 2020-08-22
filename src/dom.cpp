@@ -256,7 +256,8 @@ void
 do_button_(dom::context ctx, readable<std::string> text, action<> on_click)
 {
     element(ctx, "button")
-        .attr("class", "btn btn-secondary")
+        .attr("type", "button")
+        .attr("class", "btn btn-primary btn-block")
         .attr("disabled", !on_click.is_ready())
         .callback("click", [&](auto& e) { perform_action(on_click); })
         .text(text);
