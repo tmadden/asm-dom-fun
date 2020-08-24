@@ -35,16 +35,16 @@ install_element_callback(
     };
     EM_ASM_(
         {
-            const element = Module.nodes[$0];
-            const type = Module['UTF8ToString']($2);
-            const handler = function(e)
+            var element = Module.nodes[$0];
+            var type = Module['UTF8ToString']($2);
+            var handler = function(e)
             {
-                const start = window.performance.now();
+                var start = window.performance.now();
                 Module.callback_proxy($1, e);
-                const end = window.performance.now();
+                var end = window.performance.now();
                 console.log(
                     "total event time: " + (((end - start) * 1000) | 0)
-                    + "[µs]");
+                    + " µs");
             };
             element.addEventListener(type, handler);
             // Add the handler to asm-dom's event list so that it knows to clear
@@ -171,7 +171,7 @@ set_element_property(
     // this to track what it needs to clean up when recycling a DOM node.
     EM_ASM_(
         {
-            const element = Module.nodes[$0];
+            var element = Module.nodes[$0];
             if (!element.hasOwnProperty('asmDomRaws'))
                 element['asmDomRaws'] = [];
             element['asmDomRaws'].push(Module['UTF8ToString']($1));
@@ -185,11 +185,12 @@ clear_element_property(element_object& object, char const* name)
 {
     EM_ASM_(
         {
-            Module.nodes[$0][$1] = emscripten::val::undefined();
+            var node = Module.nodes[$0];
+            delete node[$1];
 
             // Remove the property name from the element's 'asmDomRaws' list.
-            const asmDomRaws = Module.nodes[$0]['asmDomRaws'];
-            const index = asmDomRaws.indexOf(Module['UTF8ToString']($1));
+            var asmDomRaws = node['asmDomRaws'];
+            var index = asmDomRaws.indexOf(Module['UTF8ToString']($1));
             if (index > -1)
             {
                 asmDomRaws.splice(index, 1);
@@ -203,60 +204,53 @@ struct input_data
 {
     captured_id value_id;
     string value;
-    bool invalid = false;
+    signal_validation_data validation;
     unsigned version = 0;
 };
 
 void
-do_input_(dom::context ctx, duplex<string> value)
+input_(dom::context ctx, duplex<string> value_)
 {
     input_data* data;
     get_cached_data(ctx, &data);
 
+    auto value = enforce_validity(ctx, value_, data->validation);
+
     on_refresh(ctx, [&](auto ctx) {
-        refresh_signal_shadow(
-            data->value_id,
-            value,
-            [&](string new_value) {
-                data->value = std::move(new_value);
-                data->invalid = false;
-                ++data->version;
-            },
-            [&]() {
-                data->value.clear();
-                data->invalid = false;
-                ++data->version;
-            });
+        if (!value.is_invalidated())
+        {
+            refresh_signal_shadow(
+                data->value_id,
+                value,
+                [&](string new_value) {
+                    data->value = std::move(new_value);
+                    ++data->version;
+                },
+                [&]() {
+                    data->value.clear();
+                    ++data->version;
+                });
+        }
     });
 
     element(ctx, "input")
         .attr(
             "class",
-            conditional(data->invalid, "invalid-input", "form-control"))
+            conditional(
+                value.is_invalidated(), "invalid-input", "form-control"))
         .prop("value", data->value)
         .callback("input", [=](emscripten::val& e) {
             auto new_value = e["target"]["value"].as<std::string>();
-            if (signal_ready_to_write(value))
-            {
-                try
-                {
-                    write_signal(value, new_value);
-                }
-                catch (validation_error&)
-                {
-                    data->invalid = true;
-                }
-            }
+            write_signal(value, new_value);
             data->value = new_value;
             ++data->version;
         });
 }
 
 void
-do_button_(dom::context ctx, readable<std::string> text, action<> on_click)
+button_(dom::context ctx, readable<std::string> text, action<> on_click)
 {
     element(ctx, "button")
-        .attr("type", "button")
         .attr("class", "btn btn-primary btn-block")
         .attr("disabled", !on_click.is_ready())
         .callback("click", [&](auto& e) { perform_action(on_click); })
@@ -264,7 +258,7 @@ do_button_(dom::context ctx, readable<std::string> text, action<> on_click)
 }
 
 void
-do_checkbox_(dom::context ctx, duplex<bool> value, readable<std::string> label)
+checkbox_(dom::context ctx, duplex<bool> value, readable<std::string> label)
 {
     bool determinate = value.has_value();
     bool checked = determinate && value.read();
@@ -291,7 +285,7 @@ do_checkbox_(dom::context ctx, duplex<bool> value, readable<std::string> label)
 }
 
 void
-do_link_(dom::context ctx, readable<std::string> text, action<> on_click)
+link_(dom::context ctx, readable<std::string> text, action<> on_click)
 {
     element(ctx, "li").children([&](auto ctx) {
         element(ctx, "a")
@@ -304,7 +298,7 @@ do_link_(dom::context ctx, readable<std::string> text, action<> on_click)
 }
 
 void
-do_colored_box(dom::context ctx, readable<rgb8> color)
+colored_box(dom::context ctx, readable<rgb8> color)
 {
     element(ctx, "div")
         .attr("class", "colored-box")
@@ -373,19 +367,8 @@ system::operator()(alia::context vanilla_ctx)
 
     if (is_refresh_event(ctx))
     {
-        // std::chrono::steady_clock::time_point begin
-        //     = std::chrono::steady_clock::now();
-
         traverse_object_tree(
             traversal, this->root_node, [&]() { this->controller(ctx); });
-
-        // std::chrono::steady_clock::time_point end
-        //     = std::chrono::steady_clock::now();
-        // std::cout << "refresh time: "
-        //           << std::chrono::duration_cast<std::chrono::microseconds>(
-        //                  end - begin)
-        //                  .count()
-        //           << "[µs]" << std::endl;
     }
     else
     {
@@ -422,6 +405,12 @@ initialize(
     emscripten::val document = emscripten::val::global("document");
     emscripten::val placeholder
         = document.call<emscripten::val>("getElementById", dom_node_id);
+    if (placeholder.isNull())
+    {
+        auto msg = dom_node_id + " not found in document";
+        EM_ASM_({ console.error(Module['UTF8ToString']($0)); }, msg.c_str());
+        throw exception(msg);
+    }
     // For now, just create a div to hold all our content.
     emscripten::val root = document.call<emscripten::val>(
         "createElement", emscripten::val("div"));

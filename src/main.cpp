@@ -144,7 +144,7 @@ do_nav_ui(dom::context ctx)
     auto on_click
         = lambda_action([]() { std::cout << "It worked!!" << std::endl; });
 
-    do_link(ctx, "Just Testing", on_click);
+    link(ctx, "Just Testing", on_click);
 }
 
 void
@@ -162,22 +162,24 @@ do_content_ui(dom::context ctx)
     // auto color = get_state(ctx, value(rgb8(0, 0, 0)));
     // {
     //     scoped_div buttons(ctx, value("button-container"));
-    //     do_button(ctx, "black"_a, color <<= value(rgb8(50, 50, 55)));
-    //     do_button(ctx, "white"_a, color <<= value(rgb8(230, 230, 255)));
+    //     button(ctx, "black"_a, color <<= value(rgb8(50, 50, 55)));
+    //     button(ctx, "white"_a, color <<= value(rgb8(230, 230, 255)));
     // }
-    // do_colored_box(ctx, smooth(ctx, color));
+    // colored_box(ctx, smooth(ctx, color));
 
     auto color = get_state(ctx, value(rgb8(0, 0, 0)));
     {
         // scoped_div buttons(ctx, value("button-container"));
-        do_button(ctx, "black"_a, color <<= value(rgb8(50, 50, 55)));
-        do_button(ctx, "white"_a, color <<= value(rgb8(230, 230, 255)));
+        // button(ctx, "black"_a, color <<= value(rgb8(50, 50, 55)));
+        // button(ctx, "white"_a, color <<= value(rgb8(230, 230, 255)));
     }
-    // do_colored_box(ctx, smooth(ctx, color));
+    // colored_box(ctx, smooth(ctx, color));
+
+    text(ctx, "Hello, World!");
 
     // auto n = get_state(ctx, empty<int>());
     // element(ctx, "div").attr("class", "form-group").children([&](auto ctx) {
-    //     do_input(ctx, n);
+    //     input(ctx, n);
     // });
 
     // element(ctx, "h4")
@@ -204,17 +206,17 @@ do_content_ui(dom::context ctx)
 
     // auto storage_value = get_state(ctx, "");
     // element(ctx, "div").attr("class", "form-group").children([&](auto ctx) {
-    //     do_checkbox(ctx, state, "Abacadaba");
+    //     checkbox(ctx, state, "Abacadaba");
 
     //     element(ctx, "div")
     //         .attr("class", "input-group")
     //         .children([&](auto ctx) {
-    //             do_input(ctx, storage_value);
+    //             input(ctx, storage_value);
 
     //             element(ctx, "div")
     //                 .attr("class", "input-group-append")
     //                 .children([&](auto ctx) {
-    //                     do_button(ctx, "Store!", lambda_action([&] {
+    //                     button(ctx, "Store!", lambda_action([&] {
     //                                   emscripten::val::global("localStorage")
     //                                       .call<void>(
     //                                           "setItem",
@@ -222,7 +224,7 @@ do_content_ui(dom::context ctx)
     //                                           emscripten::val(
     //                                               read_signal(storage_value)));
     //                               }));
-    //                     do_button(
+    //                     button(
     //                         ctx, "Retrieve!", lambda_action([&] {
     //                             write_signal(
     //                                 storage_value,

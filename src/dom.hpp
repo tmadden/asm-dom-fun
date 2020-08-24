@@ -102,7 +102,7 @@ template<class Text>
 void
 text_node(dom::context ctx, Text text)
 {
-    text_node_(ctx, signalize(text));
+    text_node_(ctx, as_text(ctx, signalize(text)));
 }
 
 void
@@ -283,51 +283,61 @@ struct scoped_element : noncopyable
     bool initializing_;
 };
 
+template<class Signal>
 void
-do_input_(dom::context ctx, duplex<string> value);
+text(dom::context ctx, Signal signal)
+{
+    dom::element(ctx, "p").text(signal);
+}
+
+void
+input_(dom::context ctx, duplex<string> value);
 
 template<class Signal>
 void
-do_input(dom::context ctx, Signal signal)
+input(dom::context ctx, Signal signal)
 {
-    do_input_(ctx, as_duplex_text(ctx, signal));
+    input_(ctx, as_duplex_text(ctx, signal));
 }
 
 void
-do_checkbox(dom::context ctx, duplex<bool> value);
-
-void
-do_button_(dom::context ctx, readable<std::string> text, action<> on_click);
+button_(dom::context ctx, readable<std::string> text, action<> on_click);
 
 template<class Text>
 void
-do_button(dom::context ctx, Text text, action<> on_click)
+button(dom::context ctx, Text text, action<> on_click)
 {
-    do_button_(ctx, signalize(text), on_click);
+    button_(ctx, signalize(text), on_click);
 }
 
 void
-do_checkbox_(dom::context ctx, duplex<bool> value, readable<std::string> label);
+checkbox_(dom::context ctx, duplex<bool> value, readable<std::string> label);
 
 template<class Label>
 void
-do_checkbox(dom::context ctx, duplex<bool> value, Label label)
+checkbox(dom::context ctx, duplex<bool> value, Label label)
 {
-    do_checkbox_(ctx, value, signalize(label));
+    checkbox_(ctx, value, signalize(label));
 }
 
 void
-do_link_(dom::context ctx, readable<std::string> text, action<> on_click);
+link_(dom::context ctx, readable<std::string> text, action<> on_click);
 
 template<class Text>
 void
-do_link(dom::context ctx, Text text, action<> on_click)
+link(dom::context ctx, Text text, action<> on_click)
 {
-    do_link_(ctx, signalize(text), on_click);
+    link_(ctx, signalize(text), on_click);
 }
 
 void
-do_colored_box(dom::context ctx, readable<rgb8> color);
+colored_box(dom::context ctx, readable<rgb8> color);
+
+inline void
+colored_box(dom::context ctx, rgb8 const& color)
+{
+    colored_box(ctx, value(color));
+}
 
 struct div_data;
 
@@ -361,7 +371,7 @@ struct cached_content_data
 
 template<class Context, class Function>
 void
-do_cached_content(Context ctx, id_interface const& id, Function&& fn)
+cached_content(Context ctx, id_interface const& id, Function&& fn)
 {
     cached_content_data* data;
     if (get_data(ctx, &data))

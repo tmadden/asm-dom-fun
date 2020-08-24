@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// alia.hpp - (local) - generated 2020-07-24T16:00:10-04:00
+// alia.hpp - (local) - generated 2020-08-24T08:52:22-04:00
 
 #ifndef ALIA_CORE_HPP
 #define ALIA_CORE_HPP
