@@ -22,14 +22,24 @@ set_property(TARGET main PROPERTY CXX_STANDARD 17)
 target_link_libraries(main PRIVATE asm-dom)
 
 # Create symlinks for index.html and style.css file in the build directory.
-file(CREATE_LINK
-     ${CMAKE_CURRENT_SOURCE_DIR}/src/index.html
-     ${CMAKE_CURRENT_BINARY_DIR}/index.html
-     SYMBOLIC)
-file(CREATE_LINK
-     ${CMAKE_CURRENT_SOURCE_DIR}/src/style.css
-     ${CMAKE_CURRENT_BINARY_DIR}/style.css
-     SYMBOLIC)
+# (Or copy them if we're on Travis so that deployment works.)
+if(DEFINED ENV{TRAVIS})
+    file(COPY
+        src/index.html
+        DESTINATION .)
+    file(COPY
+        src/style.css
+        DESTINATION .)
+else()
+    file(CREATE_LINK
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/index.html
+        ${CMAKE_CURRENT_BINARY_DIR}/index.html
+        SYMBOLIC)
+    file(CREATE_LINK
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/style.css
+        ${CMAKE_CURRENT_BINARY_DIR}/style.css
+        SYMBOLIC)
+endif()
 
 # Download the Bootstrap/Tabler CSS/JS files.
 file(DOWNLOAD
