@@ -21,14 +21,26 @@ add_executable(main src/main.cpp src/color.cpp src/dom.cpp)
 set_property(TARGET main PROPERTY CXX_STANDARD 17)
 target_link_libraries(main PRIVATE asm-dom)
 
-# # Copy the index.html file into the build directory
-# configure_file(
-#   ${CMAKE_CURRENT_SOURCE_DIR}/src/index.html
-#   ${CMAKE_CURRENT_BINARY_DIR}/index.html
-# )
+# Create symlinks for index.html and style.css file in the build directory.
+file(CREATE_LINK
+     ${CMAKE_CURRENT_SOURCE_DIR}/src/index.html
+     ${CMAKE_CURRENT_BINARY_DIR}/index.html
+     SYMBOLIC)
+file(CREATE_LINK
+     ${CMAKE_CURRENT_SOURCE_DIR}/src/style.css
+     ${CMAKE_CURRENT_BINARY_DIR}/style.css
+     SYMBOLIC)
 
-# # Copy the style.css file into the build directory
-# configure_file(
-#   ${CMAKE_CURRENT_SOURCE_DIR}/src/style.css
-#   ${CMAKE_CURRENT_BINARY_DIR}/style.css
-# )
+# Download the Bootstrap/Tabler CSS/JS files.
+file(DOWNLOAD
+     https://preview-dev.tabler.io/dist/css/tabler.min.css?1588343458
+     ${CMAKE_CURRENT_BINARY_DIR}/tabler.min.css)
+file(DOWNLOAD
+     https://preview-dev.tabler.io/dist/css/tabler-buttons.min.css?1588343458
+     ${CMAKE_CURRENT_BINARY_DIR}/tabler-buttons.min.css)
+file(DOWNLOAD
+     https://preview-dev.tabler.io/dist/libs/bootstrap/dist/js/bootstrap.bundle.min.js?1588343458
+     ${CMAKE_CURRENT_BINARY_DIR}/bootstrap.bundle.min.js)
+file(DOWNLOAD
+     https://preview-dev.tabler.io/dist/libs/bootstrap/dist/js/tabler.min.js?1588343458
+     ${CMAKE_CURRENT_BINARY_DIR}/tabler.min.js)
